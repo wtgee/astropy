@@ -19,6 +19,7 @@ from . import core
 from . import fixedwidth
 
 from ...utils.compat import suppress
+from ...extern.six.moves import range
 
 
 __doctest_skip__ = ['*']
@@ -36,7 +37,7 @@ class CdsHeader(core.BaseHeader):
     def get_type_map_key(self, col):
         match = re.match(r'\d*(\S)', col.raw_type.lower())
         if not match:
-            raise ValueError('Unrecognized CDS format "%s" for column "%s"' % (
+            raise ValueError('Unrecognized CDS format "{}" for column "{}"'.format(
                 col.raw_type, col.name))
         return match.group(1)
 
@@ -66,7 +67,7 @@ class CdsHeader(core.BaseHeader):
                 line = line.strip()
                 if in_header:
                     lines.append(line)
-                    if line.startswith('------') or line.startswith('======='):
+                    if line.startswith(('------', '=======')):
                         comment_lines += 1
                         if comment_lines == 3:
                             break
@@ -109,7 +110,7 @@ class CdsHeader(core.BaseHeader):
 
         cols = []
         for line in itertools.islice(lines, i_col_def+4, None):
-            if line.startswith('------') or line.startswith('======='):
+            if line.startswith(('------', '=======')):
                 break
             match = re_col_def.match(line)
             if match:
@@ -148,7 +149,7 @@ class CdsHeader(core.BaseHeader):
                 if cols:
                     cols[-1].description += line.strip()
                 else:
-                    raise ValueError('Line "%s" not parsable as CDS header' % line)
+                    raise ValueError('Line "{}" not parsable as CDS header'.format(line))
 
         self.names = [x.name for x in cols]
 
@@ -168,8 +169,8 @@ class CdsData(core.BaseData):
         # attribute.
         if self.header.readme and self.table_name:
             return lines
-        i_sections = [i for (i, x) in enumerate(lines)
-                      if x.startswith('------') or x.startswith('=======')]
+        i_sections = [i for i, x in enumerate(lines)
+                      if x.startswith(('------', '======='))]
         if not i_sections:
             raise core.InconsistentTableError('No CDS section delimiter found')
         return lines[i_sections[-1]+1:]

@@ -11,10 +11,11 @@ from __future__ import (absolute_import, division, print_function,
 import numpy as np
 from numpy.testing.utils import assert_allclose, assert_array_equal
 
-from ..angles import Longitude, Latitude, Angle
-from ...tests.helper import pytest
+from ..angles import Longitude, Latitude, Angle, rotation_matrix, angle_axis
+from ...tests.helper import pytest, catch_warnings
 from ... import units as u
 from ..errors import IllegalSecondError, IllegalMinuteError, IllegalHourError
+from ...utils.exceptions import AstropyDeprecationWarning
 
 
 def test_create_angles():
@@ -168,9 +169,17 @@ def test_angle_ops():
     assert a1 < a5
     assert a1 <= a5
 
+    # check operations with non-angular result give Quantity.
     a6 = Angle(45., u.degree)
     a7 = a6 * a5
     assert type(a7) is u.Quantity
+
+    # but those with angular result yield Angle.
+    # (a9 is regression test for #5327)
+    a8 = a1 + 1.*u.deg
+    assert type(a8) is Angle
+    a9 = 1.*u.deg + a1
+    assert type(a9) is Angle
 
     with pytest.raises(TypeError):
         a6 *= a5
@@ -815,49 +824,6 @@ def test_mixed_string_and_quantity():
     assert_array_equal(a2.value, [1., 180., 3.])
     assert a2.unit == u.deg
 
-def test_rotation_matrix():
-    from ..angles import rotation_matrix
-
-    assert_array_equal(rotation_matrix(0*u.deg, 'x'), np.eye(3))
-
-    assert_allclose(rotation_matrix(90*u.deg, 'y'), [[ 0, 0,-1],
-                                                     [ 0, 1, 0],
-                                                     [ 1, 0, 0]], atol=1e-12)
-
-    assert_allclose(rotation_matrix(-90*u.deg, 'z'), [[ 0,-1, 0],
-                                                      [ 1, 0, 0],
-                                                      [ 0, 0, 1]], atol=1e-12)
-
-    assert_allclose(rotation_matrix(45*u.deg, 'x'),
-                    rotation_matrix(45*u.deg, [1, 0, 0]))
-    assert_allclose(rotation_matrix(125*u.deg, 'y'),
-                    rotation_matrix(125*u.deg, [0, 1, 0]))
-    assert_allclose(rotation_matrix(-30*u.deg, 'z'),
-                    rotation_matrix(-30*u.deg, [0, 0, 1]))
-
-    assert_allclose(np.dot(rotation_matrix(180*u.deg, [1, 1, 0]).A, [1, 0, 0]),
-                    [0, 1, 0], atol=1e-12)
-
-    #make sure it also works for very small angles
-    assert_allclose(rotation_matrix(0.000001*u.deg, 'x'),
-                    rotation_matrix(0.000001*u.deg, [1, 0, 0]))
-
-def test_angle_axis():
-    from ..angles import rotation_matrix, angle_axis
-
-    m1 = rotation_matrix(35*u.deg, 'x')
-    an1, ax1 = angle_axis(m1)
-
-    assert an1 - 35*u.deg < 1e-10*u.deg
-    assert_allclose(ax1, [1, 0, 0])
-
-
-    m2 = rotation_matrix(-89*u.deg, [1, 1, 0])
-    an2, ax2 = angle_axis(m2)
-
-    assert an2 - 89*u.deg < 1e-10*u.deg
-    assert_allclose(ax2, [-2**-0.5, -2**-0.5, 0])
-
 def test_array_angle_tostring():
     aobj = Angle([1, 2], u.deg)
     assert aobj.to_string().dtype.kind == 'U'
@@ -890,9 +856,42 @@ def test_repr_latex():
     arrangle = Angle([1, 2.1], u.deg)
     rlarrangle = arrangle._repr_latex_()
 
-    assert rlscangle == '$2^\circ06{}^\prime00{}^{\prime\prime}$'
+    assert rlscangle == r'$2^\circ06{}^\prime00{}^{\prime\prime}$'
     assert rlscangle.split('$')[1] in rlarrangle
 
     # make sure the ... appears for large arrays
     bigarrangle = Angle(np.ones(50000)/50000., u.deg)
     assert '...' in bigarrangle._repr_latex_()
+
+
+def test_rotation_matrix_deprecation():
+    with catch_warnings(AstropyDeprecationWarning):
+        m = rotation_matrix(0.*u.deg, 'x')
+    assert isinstance(m, np.matrix)
+    assert_array_equal(m, np.eye(3))
+
+
+def test_angle_axis_deprecation():
+    m = np.matrix([[0., 1., 0,],
+                   [-1, 0., 0.],
+                   [0., 0., 1.]])
+    with catch_warnings(AstropyDeprecationWarning):
+        an1, ax1 = angle_axis(m)
+    assert_allclose(an1.to(u.deg).value, 90.)
+    assert_allclose(ax1, [0., 0., 1.])
+
+
+def test_angle_with_cds_units_enabled():
+    """Regression test for #5350
+
+    Especially the example in
+    https://github.com/astropy/astropy/issues/5350#issuecomment-248770151
+    """
+    from ...units import cds
+    # the problem is with the parser, so remove it temporarily
+    from ..angle_utilities import _AngleParser
+    del _AngleParser._parser
+    with cds.enable():
+        Angle('5d')
+    del _AngleParser._parser
+    Angle('5d')

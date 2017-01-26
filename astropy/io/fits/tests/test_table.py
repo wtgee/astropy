@@ -4,6 +4,7 @@ from __future__ import division, with_statement, print_function
 import contextlib
 import copy
 import gc
+import re
 
 import numpy as np
 from numpy import char as chararray
@@ -15,10 +16,11 @@ except ImportError:
     HAVE_OBJGRAPH = False
 
 from ....extern import six
-from ....extern.six.moves import range
+from ....extern.six.moves import range, zip
 from ....extern.six.moves import cPickle as pickle
 from ....io import fits
 from ....tests.helper import pytest, catch_warnings, ignore_warnings
+from ....utils.exceptions import AstropyDeprecationWarning
 
 from ..column import Delayed, NUMPY2FITS
 from ..util import decode_ascii
@@ -198,7 +200,7 @@ class TestTableFunctions(FitsTestCase):
         # now we write out the newly created table HDU to a FITS file:
         fout = fits.HDUList(fits.PrimaryHDU())
         fout.append(tbhdu)
-        fout.writeto(self.temp('tableout1.fits'), clobber=True)
+        fout.writeto(self.temp('tableout1.fits'), overwrite=True)
 
         with fits.open(self.temp('tableout1.fits')) as f2:
             temp = f2[1].data.field(7)
@@ -288,7 +290,7 @@ class TestTableFunctions(FitsTestCase):
                 {'abc': (np.dtype('|S3'), 18),
                  'def': (np.dtype('|S15'), 2),
                  't1': (np.dtype('|S10'), 21)})
-        hdu.writeto(self.temp('toto.fits'), clobber=True)
+        hdu.writeto(self.temp('toto.fits'), overwrite=True)
         hdul = fits.open(self.temp('toto.fits'))
         assert comparerecords(hdu.data, hdul[1].data)
         hdul.close()
@@ -302,7 +304,7 @@ class TestTableFunctions(FitsTestCase):
         cols = fits.ColDefs([col])
         tbhdu = fits.BinTableHDU.from_columns(cols)
         tbhdu.name = "RFI"
-        tbhdu.writeto(self.temp('testendian.fits'), clobber=True)
+        tbhdu.writeto(self.temp('testendian.fits'), overwrite=True)
         hduL = fits.open(self.temp('testendian.fits'))
         rfiHDU = hduL['RFI']
         data = rfiHDU.data
@@ -330,7 +332,7 @@ class TestTableFunctions(FitsTestCase):
 
         # Double check that the array is converted to the correct byte-order
         # for FITS (big-endian).
-        tbhdu.writeto(self.temp('testendian.fits'), clobber=True)
+        tbhdu.writeto(self.temp('testendian.fits'), overwrite=True)
         with fits.open(self.temp('testendian.fits')) as hdul:
             assert (hdul[1].data['a'] == a2).all()
             assert (hdul[1].data['b'] == a2).all()
@@ -344,7 +346,7 @@ class TestTableFunctions(FitsTestCase):
             names='order,name,mag,Sp')
         hdu = fits.BinTableHDU(bright)
         assert comparerecords(hdu.data, bright)
-        hdu.writeto(self.temp('toto.fits'), clobber=True)
+        hdu.writeto(self.temp('toto.fits'), overwrite=True)
         hdul = fits.open(self.temp('toto.fits'))
         assert comparerecords(hdu.data, hdul[1].data)
         assert comparerecords(bright, hdul[1].data)
@@ -358,7 +360,7 @@ class TestTableFunctions(FitsTestCase):
                       (3, 'Rigil Kent', -0.1, 'G2V')], dtype=desc)
         hdu = fits.BinTableHDU(a)
         assert comparerecords(hdu.data, a.view(fits.FITS_rec))
-        hdu.writeto(self.temp('toto.fits'), clobber=True)
+        hdu.writeto(self.temp('toto.fits'), overwrite=True)
         hdul = fits.open(self.temp('toto.fits'))
         assert comparerecords(hdu.data, hdul[1].data)
         hdul.close()
@@ -367,7 +369,7 @@ class TestTableFunctions(FitsTestCase):
         bright = np.rec.array([(1, 'Serius', -1.45, 'A1V'),
                                (2, 'Canopys', -0.73, 'F0Ib'),
                                (3, 'Rigil Kent', -0.1, 'G2V')],
-                              formats='int16,a20,float32,a10',
+                              formats='int16,a20,float64,a10',
                               names='order,name,mag,Sp')
         hdu = fits.TableHDU.from_columns(bright, nrows=2)
 
@@ -424,12 +426,12 @@ class TestTableFunctions(FitsTestCase):
         assert hdu.data[0][1] == 'Serius'
         assert hdu.data[1][1] == 'Canopys'
         assert (hdu.data.field(2) ==
-                np.array([-1.45, -0.73], dtype=np.float32)).all()
+                np.array([-1.45, -0.73], dtype=np.float64)).all()
         assert hdu.data[0][3] == 'A1V'
         assert hdu.data[1][3] == 'F0Ib'
 
         with ignore_warnings():
-            hdu.writeto(self.temp('toto.fits'), clobber=True)
+            hdu.writeto(self.temp('toto.fits'), overwrite=True)
 
         with fits.open(self.temp('toto.fits')) as hdul:
             assert (hdul[1].data.field(0) ==
@@ -437,7 +439,7 @@ class TestTableFunctions(FitsTestCase):
             assert hdul[1].data[0][1] == 'Serius'
             assert hdul[1].data[1][1] == 'Canopys'
             assert (hdul[1].data.field(2) ==
-                    np.array([-1.45, -0.73], dtype=np.float32)).all()
+                    np.array([-1.45, -0.73], dtype=np.float64)).all()
             assert hdul[1].data[0][3] == 'A1V'
             assert hdul[1].data[1][3] == 'F0Ib'
         del hdul
@@ -445,11 +447,11 @@ class TestTableFunctions(FitsTestCase):
         hdu = fits.BinTableHDU.from_columns(bright, nrows=2)
         tmp = np.rec.array([(1, 'Serius', -1.45, 'A1V'),
                             (2, 'Canopys', -0.73, 'F0Ib')],
-                           formats='int16,a20,float32,a10',
+                           formats='int16,a20,float64,a10',
                            names='order,name,mag,Sp')
         assert comparerecords(hdu.data, tmp)
         with ignore_warnings():
-            hdu.writeto(self.temp('toto.fits'), clobber=True)
+            hdu.writeto(self.temp('toto.fits'), overwrite=True)
         with fits.open(self.temp('toto.fits')) as hdul:
             assert comparerecords(hdu.data, hdul[1].data)
 
@@ -807,7 +809,7 @@ class TestTableFunctions(FitsTestCase):
         for col in b.columns:
             col.null = NULLS[col.name]
 
-        b.writeto(self.temp('test.fits'), clobber=True)
+        b.writeto(self.temp('test.fits'), overwrite=True)
 
         with fits.open(self.temp('test.fits')) as hdul:
             header = hdul[1].header
@@ -825,9 +827,11 @@ class TestTableFunctions(FitsTestCase):
 
         hdul = fits.open(self.temp('newtable.fits'))
 
-        assert str(hdu.data) == "[('NGC1002', 12.3) ('NGC1003', 15.2)]"
-
-        assert str(hdul[1].data) == "[('NGC1002', 12.3) ('NGC1003', 15.2)]"
+        # numpy >= 1.12 changes how structured arrays are printed, so we
+        # match to a regex rather than a specific string.
+        expect = r"\[\('NGC1002',\s+12.3[0-9]*\) \(\'NGC1003\',\s+15.[0-9]+\)\]"
+        assert re.match(expect, str(hdu.data))
+        assert re.match(expect, str(hdul[1].data))
 
         t.close()
         hdul.close()
@@ -1503,6 +1507,15 @@ class TestTableFunctions(FitsTestCase):
             assert hdu.name == 'FOO'
             assert hdu.header['EXTNAME'] == 'FOO'
 
+    def test_unicode_colname(self):
+        """
+        Regression test for https://github.com/astropy/astropy/issues/5204
+        "Handle unicode FITS BinTable column names on Python 2"
+        """
+        col = fits.Column(name=u'spam', format='E', array=[42.])
+        # This used to raise a TypeError, now it works
+        fits.BinTableHDU.from_columns([col])
+
     def test_bin_table_with_logical_array(self):
         c1 = fits.Column(name='flag', format='2L',
                          array=[[True, False], [False, True]])
@@ -1596,7 +1609,7 @@ class TestTableFunctions(FitsTestCase):
 
         ahdu = fits.TableHDU.from_columns([acol])
         with ignore_warnings():
-            ahdu.writeto(self.temp('newtable.fits'), clobber=True)
+            ahdu.writeto(self.temp('newtable.fits'), overwrite=True)
 
         with fits.open(self.temp('newtable.fits')) as hdul:
             assert (hdul[1].data.tostring().decode('raw-unicode-escape') ==
@@ -1607,7 +1620,7 @@ class TestTableFunctions(FitsTestCase):
 
         # Now serialize once more as a binary table; padding bytes should
         # revert to zeroes
-        ahdu.writeto(self.temp('newtable.fits'), clobber=True)
+        ahdu.writeto(self.temp('newtable.fits'), overwrite=True)
         with fits.open(self.temp('newtable.fits')) as hdul:
             assert hdul[1].data.tostring().decode('raw-unicode-escape') == s
             assert (hdul[1].data['MEMNAME'] == a).all()
@@ -1654,7 +1667,7 @@ class TestTableFunctions(FitsTestCase):
         data['x'] = 1, 2, 3
         data['s'] = 'ok'
         with ignore_warnings():
-            fits.writeto(self.temp('newtable.fits'), data, clobber=True)
+            fits.writeto(self.temp('newtable.fits'), data, overwrite=True)
 
         t = fits.getdata(self.temp('newtable.fits'))
 
@@ -1670,7 +1683,7 @@ class TestTableFunctions(FitsTestCase):
         del t
 
         with ignore_warnings():
-            fits.writeto(self.temp('newtable.fits'), data, clobber=True)
+            fits.writeto(self.temp('newtable.fits'), data, overwrite=True)
 
         t = fits.getdata(self.temp('newtable.fits'))
 
@@ -1704,21 +1717,21 @@ class TestTableFunctions(FitsTestCase):
 
         def test_dims_and_roundtrip(tbhdu):
             assert tbhdu.data['S'].shape == (5, 3, 2)
-            if six.PY3:
-                assert tbhdu.data['S'].dtype.str.endswith('U4')
-            else:
+            if six.PY2:
                 assert tbhdu.data['S'].dtype.str.endswith('S4')
+            else:
+                assert tbhdu.data['S'].dtype.str.endswith('U4')
 
-            tbhdu.writeto(self.temp('test.fits'), clobber=True)
+            tbhdu.writeto(self.temp('test.fits'), overwrite=True)
 
             with fits.open(self.temp('test.fits')) as hdul:
                 tbhdu2 = hdul[1]
                 assert tbhdu2.header['TDIM1'] == '(4,2,3)'
                 assert tbhdu2.data['S'].shape == (5, 3, 2)
-                if six.PY3:
-                    assert tbhdu.data['S'].dtype.str.endswith('U4')
-                else:
+                if six.PY2:
                     assert tbhdu.data['S'].dtype.str.endswith('S4')
+                else:
+                    assert tbhdu.data['S'].dtype.str.endswith('U4')
                 assert np.all(tbhdu2.data['S'] == tbhdu.data['S'])
 
         test_dims_and_roundtrip(tbhdu1)
@@ -2123,6 +2136,53 @@ class TestTableFunctions(FitsTestCase):
                          "the header may be missing the necessary TNULL1 "
                          "keyword or the table contains invalid data")
 
+    def test_blank_field_zero(self):
+        """Regression test for https://github.com/astropy/astropy/issues/5134
+
+        Blank values in numerical columns of ASCII tables should be replaced
+        with zeros, so they can be loaded into numpy arrays.
+
+        When a TNULL value is set and there are blank fields not equal to that
+        value, they should be replaced with zeros.
+        """
+
+        # Test an integer column with blank string as null
+        nullval1 = u' '
+
+        c1 = fits.Column('F1', format='I8', null=nullval1,
+                         array=np.array([0, 1, 2, 3, 4]),
+                         ascii=True)
+        table = fits.TableHDU.from_columns([c1])
+        table.writeto(self.temp('ascii_null.fits'))
+
+        # Replace the 1st col, 3rd row, with a null field.
+        with open(self.temp('ascii_null.fits'), mode='r+') as h:
+            nulled = h.read().replace(u'2       ', u'        ')
+            h.seek(0)
+            h.write(nulled)
+
+        with fits.open(self.temp('ascii_null.fits'), memmap=True) as f:
+            assert f[1].data[2][0] == 0
+
+        # Test a float column with a null value set and blank fields.
+        nullval2 = 'NaN'
+        c2 = fits.Column('F1', format='F12.8', null=nullval2,
+                         array=np.array([1.0, 2.0, 3.0, 4.0]),
+                         ascii=True)
+        table = fits.TableHDU.from_columns([c2])
+        table.writeto(self.temp('ascii_null2.fits'))
+
+        # Replace the 1st col, 3rd row, with a null field.
+        with open(self.temp('ascii_null2.fits'), mode='r+') as h:
+            nulled = h.read().replace(u'3.00000000', u'          ')
+            h.seek(0)
+            h.write(nulled)
+
+        with fits.open(self.temp('ascii_null2.fits'), memmap=True) as f:
+            # (Currently it should evaluate to 0.0, but if a TODO in fitsrec is
+            # completed, then it should evaluate to NaN.)
+            assert f[1].data[2][0] == 0.0 or np.isnan(f[1].data[2][0])
+
     def test_column_array_type_mismatch(self):
         """Regression test for https://aeon.stsci.edu/ssb/trac/pyfits/ticket/218"""
 
@@ -2204,12 +2264,16 @@ class TestTableFunctions(FitsTestCase):
             tbdata = hdul[1].data
             tbhdu = fits.TableHDU(data=tbdata)
             with ignore_warnings():
-                tbhdu.writeto(self.temp('test.fits'), clobber=True)
+                tbhdu.writeto(self.temp('test.fits'), overwrite=True)
             with fits.open(self.temp('test.fits')) as hdul2:
                 tbdata2 = hdul2[1].data
                 assert np.all(tbdata['c1'] == tbdata2['c1'])
                 assert np.all(tbdata['c2'] == tbdata2['c2'])
-                assert np.all(tbdata['c3'] == tbdata2['c3'])
+                # c3 gets converted from float32 to float64 when writing
+                # test.fits, so cast to float32 before testing that the correct
+                # value is retrieved
+                assert np.all(tbdata['c3'].astype(np.float32) ==
+                              tbdata2['c3'].astype(np.float32))
                 # c4 is a boolean column in the original table; we want ASCII
                 # columns to convert these to columns of 'T'/'F' strings
                 assert np.all(np.where(tbdata['c4'], 'T', 'F') ==
@@ -2417,6 +2481,21 @@ class TestTableFunctions(FitsTestCase):
             t3.teardown_class()
         del t3
 
+    def test_dump_clobber_vs_overwrite(self):
+        with fits.open(self.data('table.fits')) as hdul:
+            tbhdu = hdul[1]
+            datafile = self.temp('data.txt')
+            cdfile = self.temp('coldefs.txt')
+            hfile = self.temp('header.txt')
+            tbhdu.dump(datafile, cdfile, hfile)
+            tbhdu.dump(datafile, cdfile, hfile, overwrite=True)
+            with catch_warnings(AstropyDeprecationWarning) as warning_lines:
+                tbhdu.dump(datafile, cdfile, hfile, clobber=True)
+                assert warning_lines[0].category == AstropyDeprecationWarning
+                assert (str(warning_lines[0].message) == '"clobber" was '
+                        'deprecated in version 1.3 and will be removed in a '
+                        'future version. Use argument "overwrite" instead.')
+
 
 @contextlib.contextmanager
 def _refcounting(type_):
@@ -2447,7 +2526,7 @@ class TestVLATables(FitsTestCase):
             pri_hdu = fits.PrimaryHDU()
             hdu_list = fits.HDUList([pri_hdu, tb_hdu])
             with ignore_warnings():
-                hdu_list.writeto(self.temp('toto.fits'), clobber=True)
+                hdu_list.writeto(self.temp('toto.fits'), overwrite=True)
 
             with fits.open(self.temp('toto.fits')) as toto:
                 q = toto[1].data.field('QUAL_SPE')
@@ -2487,7 +2566,7 @@ class TestVLATables(FitsTestCase):
             acol = fits.Column(name='testa', format=format_code, array=a)
             tbhdu = fits.BinTableHDU.from_columns([acol])
             with ignore_warnings():
-                tbhdu.writeto(self.temp('newtable.fits'), clobber=True)
+                tbhdu.writeto(self.temp('newtable.fits'), overwrite=True)
             with fits.open(self.temp('newtable.fits')) as tbhdu1:
                 assert tbhdu1[1].columns[0].format.endswith('D(2)')
                 for j in range(3):
@@ -2504,7 +2583,7 @@ class TestVLATables(FitsTestCase):
             acol = fits.Column(name='testa', format=format_code, array=a)
             tbhdu = fits.BinTableHDU.from_columns([acol])
             with ignore_warnings():
-                tbhdu.writeto(self.temp('newtable.fits'), clobber=True)
+                tbhdu.writeto(self.temp('newtable.fits'), overwrite=True)
 
             with fits.open(self.temp('newtable.fits')) as tbhdu1:
                 assert tbhdu1[1].columns[0].format.endswith('D(2)')
@@ -2522,7 +2601,7 @@ class TestVLATables(FitsTestCase):
             acol = fits.Column(name='testa', format=format_code, array=a)
             tbhdu = fits.BinTableHDU.from_columns([acol])
             with ignore_warnings():
-                tbhdu.writeto(self.temp('newtable.fits'), clobber=True)
+                tbhdu.writeto(self.temp('newtable.fits'), overwrite=True)
 
             with fits.open(self.temp('newtable.fits')) as hdul:
                 assert hdul[1].columns[0].format.endswith('A(3)')
@@ -2539,7 +2618,7 @@ class TestVLATables(FitsTestCase):
             acol = fits.Column(name='testa', format=format_code, array=a)
             tbhdu = fits.BinTableHDU.from_columns([acol])
             with ignore_warnings():
-                tbhdu.writeto(self.temp('newtable.fits'), clobber=True)
+                tbhdu.writeto(self.temp('newtable.fits'), overwrite=True)
 
             with fits.open(self.temp('newtable.fits')) as hdul:
                 assert hdul[1].columns[0].format.endswith('A(3)')
@@ -2560,7 +2639,7 @@ class TestVLATables(FitsTestCase):
             pri_hdu = fits.PrimaryHDU()
             hdu_list = fits.HDUList([pri_hdu, tb_hdu])
             with ignore_warnings():
-                hdu_list.writeto(self.temp('toto.fits'), clobber=True)
+                hdu_list.writeto(self.temp('toto.fits'), overwrite=True)
 
             data = fits.getdata(self.temp('toto.fits'))
 
@@ -2589,7 +2668,7 @@ class TestVLATables(FitsTestCase):
         t2 = fits.BinTableHDU.from_columns([c, c2])
 
         hdul = fits.HDUList([fits.PrimaryHDU(), t1, t2])
-        hdul.writeto(self.temp('test.fits'), clobber=True)
+        hdul.writeto(self.temp('test.fits'), overwrite=True)
 
         # Just test that the test file wrote out correctly
         with fits.open(self.temp('test.fits')) as h:
@@ -2726,7 +2805,7 @@ class TestColumnFunctions(FitsTestCase):
 
         with fits.open(self.temp('test.fits')) as hdul:
             assert hdul[1].header['TFORM1'] == 'F5.0'
-            assert hdul[1].data['TEST'].dtype == np.dtype('float32')
+            assert hdul[1].data['TEST'].dtype == np.dtype('float64')
             assert np.all(hdul[1].data['TEST'] == [1.0, 2.0, 3.0])
 
             # Check how the raw data looks
@@ -2877,3 +2956,14 @@ class TestColumnFunctions(FitsTestCase):
         assert c4.format == c3.format
         assert np.all(c4.array[0] == c3.array[0])
         assert np.all(c4.array[1] == c3.array[1])
+
+
+def test_regression_5383():
+
+    # Regression test for an undefined variable
+
+    x = np.array([1, 2, 3])
+    col = fits.Column(name='a', array=x, format='E')
+    hdu = fits.BinTableHDU.from_columns([col])
+    del hdu._header['TTYPE1']
+    hdu.columns[0].name = 'b'

@@ -33,7 +33,7 @@ equivalent::
     >>> c = SkyCoord('00:42.5 +41:12', unit=(u.hourangle, u.deg))
     >>> c
     <SkyCoord (ICRS): (ra, dec) in deg
-        (10.625, 41.2)>
+        ( 10.625,  41.2)>
 
 The examples above illustrate a few simple rules to follow when creating a coordinate
 object:
@@ -50,16 +50,20 @@ they store multiple coordinates in a single object.  When you're going
 to apply the same operation to many different coordinates (say, from a
 catalog), this is a better choice than a list of |skycoord| objects,
 because it will be *much* faster than applying the operation to each
-|skycoord| in a for loop.
-::
+|skycoord| in a for loop. Like the underlying `~numpy.ndarray` instances
+holding the data, |skycoord| objects can be sliced, reshaped, etc.::
 
-    >>> c = SkyCoord(ra=[10, 11]*u.degree, dec=[41, -5]*u.degree)
+    >>> c = SkyCoord(ra=[10, 11, 12, 13]*u.degree, dec=[41, -5, 42, 0]*u.degree)
     >>> c
     <SkyCoord (ICRS): (ra, dec) in deg
-        [(10.0, 41.0), (11.0, -5.0)]>
+        [( 10.,  41.), ( 11.,  -5.), ( 12.,  42.), ( 13.,   0.)]>
     >>> c[1]
     <SkyCoord (ICRS): (ra, dec) in deg
-        (11.0, -5.0)>
+        ( 11.,  -5.)>
+    >>> c.reshape(2, 2)
+    <SkyCoord (ICRS): (ra, dec) in deg
+        [[( 10., 41.), ( 11., -5.)],
+         [( 12., 42.), ( 13.,  0.)]]>
 
 Coordinate access
 -----------------
@@ -107,7 +111,7 @@ the Galactic frame use::
     >>> c_icrs = SkyCoord(ra=10.68458*u.degree, dec=41.26917*u.degree, frame='icrs')
     >>> c_icrs.galactic  # doctest: +FLOAT_CMP
     <SkyCoord (Galactic): (l, b) in deg
-        (121.174241811, -21.5728855724)>
+        ( 121.17424181, -21.57288557)>
 
 For more control, you can use the `~astropy.coordinates.SkyCoord.transform_to`
 method, which accepts a frame name, frame class, or frame instance::
@@ -115,12 +119,12 @@ method, which accepts a frame name, frame class, or frame instance::
     >>> c_fk5 = c_icrs.transform_to('fk5')  # c_icrs.fk5 does the same thing
     >>> c_fk5  # doctest: +FLOAT_CMP
     <SkyCoord (FK5: equinox=J2000.000): (ra, dec) in deg
-        (10.6845915393, 41.2691714591)>
+        ( 10.68459154,  41.26917146)>
 
     >>> from astropy.coordinates import FK5
     >>> c_fk5.transform_to(FK5(equinox='J1975'))  # precess to a different equinox  # doctest: +FLOAT_CMP
     <SkyCoord (FK5: equinox=J1975.000): (ra, dec) in deg
-        (10.3420913461, 41.1323211229)>
+        ( 10.34209135,  41.13232112)>
 
 This form of `~astropy.coordinates.SkyCoord.transform_to` also makes it
 straightforward to convert from celestial coordinates to
@@ -147,14 +151,14 @@ coordinate objects::
     >>> c = SkyCoord(x=1, y=2, z=3, unit='kpc', representation='cartesian')
     >>> c
     <SkyCoord (ICRS): (x, y, z) in kpc
-        (1.0, 2.0, 3.0)>
+        ( 1.,  2.,  3.)>
     >>> c.x, c.y, c.z
     (<Quantity 1.0 kpc>, <Quantity 2.0 kpc>, <Quantity 3.0 kpc>)
 
     >>> c.representation = 'cylindrical'
     >>> c  # doctest: +FLOAT_CMP
     <SkyCoord (ICRS): (rho, phi, z) in (kpc, deg, kpc)
-        (2.2360679775, 63.4349488229, 3.0)>
+        ( 2.23606798,  63.43494882,  3.)>
 
 For all the details see :ref:`astropy-skycoord-representations`.
 
@@ -203,14 +207,14 @@ for a particular named object::
 
     >>> SkyCoord.from_name("M42")  # doctest: +REMOTE_DATA +FLOAT_CMP
     <SkyCoord (ICRS): (ra, dec) in deg
-        (83.82208, -5.39111)>
+        ( 83.82208, -5.39111)>
 
 For sites (primarily observatories) on the Earth, `astropy.coordinates` provides
 a quick way to get an `~astropy.coordinates.EarthLocation`::
 
     >>> from astropy.coordinates import EarthLocation
     >>> EarthLocation.of_site('Apache Point Observatory')  # doctest: +REMOTE_DATA +FLOAT_CMP
-    <EarthLocation (-1463969.3018517173, -5166673.342234327, 3434985.7120456537) m>
+    <EarthLocation (-1463969.30185172, -5166673.34223433,  3434985.71204565) m>
 
 To see the list of site names available, use
 :func:`astropy.coordinates.EarthLocation.get_site_names`.
@@ -223,12 +227,12 @@ Google maps, this works with fully specified addresses, location names, city
 names, and etc.::
 
     >>> EarthLocation.of_address('1002 Holy Grail Court, St. Louis, MO')  # doctest: +REMOTE_DATA +FLOAT_CMP
-    <EarthLocation (-26727.247396719715, -4997012.160946069, 3950268.2727357596) m>
+    <EarthLocation (-26727.24739672, -4997012.16094607,  3950268.27273576) m>
     >>> EarthLocation.of_address('1002 Holy Grail Court, St. Louis, MO',
     ...                          get_height=True)  # doctest: +REMOTE_DATA +FLOAT_CMP
-    <EarthLocation (-26727.890243898288, -4997132.349722762, 3950363.9254298285) m>
+    <EarthLocation (-26727.8902439, -4997132.34972276,  3950363.92542983) m>
     >>> EarthLocation.of_address('Danbury, CT')  # doctest: +REMOTE_DATA +FLOAT_CMP
-    <EarthLocation (1364606.6451165068, -4593292.942827304, 4195415.936951392) m>
+    <EarthLocation ( 1364606.64511651, -4593292.9428273,  4195415.93695139) m>
 
 .. note::
     `~astropy.coordinates.SkyCoord.from_name`,
@@ -309,6 +313,7 @@ listed below.
    galactocentric
    remote_methods
    definitions
+   inplace
 
 
 In addition, another resource for the capabilities of this package is the

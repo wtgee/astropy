@@ -11,6 +11,7 @@ from ..util import _is_pseudo_unsigned, _unsigned_zero, _is_int
 from ..verify import VerifyWarning
 
 from ....extern.six import string_types
+from ....extern.six.moves import range, zip
 from ....utils import isiterable, lazyproperty, classproperty, deprecated
 
 
@@ -261,9 +262,9 @@ class _ImageBaseHDU(_ValidHDU):
             # some level, for most objects
             try:
                 data = np.array(data)
-            except:
-                raise TypeError('data object %r could not be coerced into an '
-                                'ndarray' % data)
+            except Exception:
+                raise TypeError('data object {!r} could not be coerced into an '
+                                'ndarray'.format(data))
 
         self.__dict__['data'] = data
         self._modified = True
@@ -514,7 +515,10 @@ class _ImageBaseHDU(_ValidHDU):
         # Do the scaling
         if _zero != 0:
             # 0.9.6.3 to avoid out of range error for BZERO = +32768
-            self.data += -_zero
+            # We have to explcitly cast _zero to prevent numpy from raising an
+            # error when doing self.data -= zero, and we do this instead of
+            # self.data = self.data - zero to avoid doubling memory usage.
+            np.add(self.data, -_zero, out=self.data, casting='unsafe')
             self._header['BZERO'] = _zero
         else:
             try:
@@ -618,7 +622,7 @@ class _ImageBaseHDU(_ValidHDU):
                 # Convert the unsigned array to signed
                 output = np.array(
                     self.data - _unsigned_zero(self.data.dtype),
-                    dtype='>i%d' % self.data.dtype.itemsize)
+                    dtype='>i{}'.format(self.data.dtype.itemsize))
                 should_swap = False
             else:
                 output = self.data
@@ -782,7 +786,8 @@ class _ImageBaseHDU(_ValidHDU):
             if (format and not self._do_not_scale_image_data and
                     (self._orig_bscale != 1 or self._orig_bzero != 0)):
                 new_dtype = self._dtype_for_bitpix()
-                format += ' (rescales to {0})'.format(new_dtype.name)
+                if new_dtype is not None:
+                    format += ' (rescales to {0})'.format(new_dtype.name)
 
         # Display shape in FITS-order
         shape = tuple(reversed(self.shape))
@@ -802,7 +807,7 @@ class _ImageBaseHDU(_ValidHDU):
             # 16, 32 or 64
             if _is_pseudo_unsigned(self.data.dtype):
                 d = np.array(self.data - _unsigned_zero(self.data.dtype),
-                             dtype='i%d' % self.data.dtype.itemsize)
+                             dtype='i{}'.format(self.data.dtype.itemsize))
 
             # Check the byte order of the data.  If it is little endian we
             # must swap it before calculating the datasum.
@@ -1116,7 +1121,7 @@ class _IndexInfo(object):
                 self.offset = indx
                 self.contiguous = True
             else:
-                raise IndexError('Index %s out of range.' % indx)
+                raise IndexError('Index {} out of range.'.format(indx))
         elif isinstance(indx, slice):
             start, stop, step = indx.indices(naxis)
             self.npts = (stop - start) // step
@@ -1127,4 +1132,4 @@ class _IndexInfo(object):
             self.offset = 0
             self.contiguous = False
         else:
-            raise IndexError('Illegal index %s' % indx)
+            raise IndexError('Illegal index {}'.format(indx))

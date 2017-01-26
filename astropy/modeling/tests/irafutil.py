@@ -7,6 +7,7 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 from ...logger import log
+from ...extern.six.moves import range
 import numpy as np
 
 
@@ -116,8 +117,8 @@ class Record(object):
         xyz = [l[:3] for l in fieldline]
         try:
             farr = np.array(xyz)
-        except:
-            log.debug("Could not read array field %s" % fieldlist[0].split()[0])
+        except Exception:
+            log.debug("Could not read array field {}".format(fieldlist[0].split()[0]))
         return farr.astype(np.float64)
 
 
@@ -240,7 +241,7 @@ class IDB(object):
         rl = dtb.split('begin')
         try:
             rl0 = rl[0].split('\n')
-        except:
+        except Exception:
             return rl
         if len(rl0) == 2 and rl0[0].startswith('#') and not rl0[1].strip():
             return rl[1:]

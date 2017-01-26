@@ -9,7 +9,7 @@ This is a set of regression tests for vo.
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 from ....extern import six
-from ....extern.six.moves import xrange
+from ....extern.six.moves import range, zip
 
 # STDLIB
 import difflib
@@ -614,6 +614,9 @@ class TestParse:
         # Smoke test
         repr(list(self.votable.iter_groups()))
 
+        # Resource
+        assert repr(self.votable.resources) == '[</>]'
+
 
 class TestThroughTableData(TestParse):
     def setup_class(self):
@@ -734,13 +737,10 @@ def table_from_scratch():
 
 
 def test_open_files():
-    def test_file(filename):
-        parse(filename, pedantic=False)
-
     for filename in get_pkg_data_filenames('data', pattern='*.xml'):
         if filename.endswith('custom_datatype.xml'):
             continue
-        yield test_file, filename
+        parse(filename, pedantic=False)
 
 
 @raises(VOTableSpecError)
@@ -823,13 +823,13 @@ def test_validate(test_path_object=False):
     output = output[1:-1]
 
     for line in difflib.unified_diff(truth, output):
-        if six.PY3:
-            sys.stdout.write(
-                line.replace('\\n', '\n'))
-        else:
+        if six.PY2:
             sys.stdout.write(
                 line.encode('unicode_escape').
                 replace('\\n', '\n'))
+        else:
+            sys.stdout.write(
+                line.replace('\\n', '\n'))
 
     assert truth == output
 
@@ -909,10 +909,10 @@ def test_fileobj():
         if sys.platform == 'win32':
             fd()
         else:
-            if six.PY3:
-                assert isinstance(fd, io.FileIO)
-            elif six.PY2:
+            if six.PY2:
                 assert isinstance(fd, file)
+            else:
+                assert isinstance(fd, io.FileIO)
 
 
 def test_nonstandard_units():
@@ -975,7 +975,7 @@ def test_resource_structure():
 
     assert len(vtf2.resources) == 3
 
-    for r in xrange(len(vtf2.resources)):
+    for r in range(len(vtf2.resources)):
         res = vtf2.resources[r]
         assert len(res.tables) == 2
         assert len(res.resources) == 0
@@ -1008,13 +1008,13 @@ def test_no_resource_check():
     output = output[1:-1]
 
     for line in difflib.unified_diff(truth, output):
-        if six.PY3:
-            sys.stdout.write(
-                line.replace('\\n', '\n'))
-        else:
+        if six.PY2:
             sys.stdout.write(
                 line.encode('unicode_escape').
                 replace('\\n', '\n'))
+        else:
+            sys.stdout.write(
+                line.replace('\\n', '\n'))
 
     assert truth == output
 

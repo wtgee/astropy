@@ -10,9 +10,10 @@ import warnings
 
 import numpy as np
 
+from ....extern.six.moves import range
 from ....io import fits
-from ....utils.exceptions import (AstropyDeprecationWarning,
-                                  AstropyPendingDeprecationWarning)
+from ....utils.exceptions import AstropyPendingDeprecationWarning
+from ....utils.compat import NUMPY_LT_1_10
 from ....tests.helper import pytest, raises, catch_warnings, ignore_warnings
 from ..hdu.compressed import SUBTRACTIVE_DITHER_1, DITHER_SEED_CHECKSUM
 from .test_table import comparerecords
@@ -117,11 +118,7 @@ class TestImageFunctions(FitsTestCase):
         with fits.open(self.temp('test.fits')) as hdul:
             assert hdul[0].name == 'XPRIMARY2'
 
-    @ignore_warnings(AstropyDeprecationWarning)
     def test_io_manipulation(self):
-        # This legacy test also tests numerous deprecated interfaces for
-        # backwards compatibility
-
         # Get a keyword value.  An extension can be referred by name or by
         # number.  Both extension and keyword names are case insensitive.
         with fits.open(self.data('test0.fits')) as r:
@@ -136,19 +133,19 @@ class TestImageFunctions(FitsTestCase):
             # append (using "update()") a new card
             r[0].header['xxx'] = 1.234e56
 
-            assert (str(r[0].header.ascard[-3:]) ==
+            assert ('\n'.join(str(x) for x in r[0].header.cards[-3:]) ==
                     "EXPFLAG = 'NORMAL            ' / Exposure interruption indicator                \n"
                     "FILENAME= 'vtest3.fits'        / File name                                      \n"
                     "XXX     =            1.234E+56                                                  ")
 
             # rename a keyword
-            r[0].header.rename_key('filename', 'fname')
-            pytest.raises(ValueError, r[0].header.rename_key, 'fname',
+            r[0].header.rename_keyword('filename', 'fname')
+            pytest.raises(ValueError, r[0].header.rename_keyword, 'fname',
                           'history')
 
-            pytest.raises(ValueError, r[0].header.rename_key, 'fname',
+            pytest.raises(ValueError, r[0].header.rename_keyword, 'fname',
                           'simple')
-            r[0].header.rename_key('fname', 'filename')
+            r[0].header.rename_keyword('fname', 'filename')
 
             # get a subsection of data
             assert np.array_equal(r[2].data[:3, :3],
@@ -252,7 +249,7 @@ class TestImageFunctions(FitsTestCase):
         hdu2 = fits.ImageHDU(header=r[1].header, data=np.array([1, 2],
                              dtype='int32'))
 
-        assert (str(hdu2.header.ascard[1:5]) ==
+        assert ('\n'.join(str(x) for x in hdu2.header.cards[1:5]) ==
             "BITPIX  =                   32 / array data type                                \n"
             "NAXIS   =                    1 / number of array dimensions                     \n"
             "NAXIS1  =                    2                                                  \n"
@@ -336,9 +333,10 @@ class TestImageFunctions(FitsTestCase):
         assert np.array_equal(fs[0].section[:, ::2], dat[:, ::2])
         assert np.array_equal(fs[0].section[:, [1, 2, 4], 3],
                               dat[:, [1, 2, 4], 3])
-        assert np.array_equal(
-            fs[0].section[:, np.array([True, False, True]), :],
-            dat[:, np.array([True, False, True]), :])
+        bool_index = np.array([True, False, True, True, False,
+                               False, True, True, False, True])
+        assert np.array_equal(fs[0].section[:, bool_index, :],
+                              dat[:, bool_index, :])
 
         assert np.array_equal(
             fs[0].section[3:6, 3, :, ...], dat[3:6, 3, :, ...])
@@ -606,24 +604,24 @@ class TestImageFunctions(FitsTestCase):
                 # Otherwise may get an overflow error, at least on Python 2
                 max_uint = np.uint64(int_size)
 
-            dtype = 'uint%d' % int_size
+            dtype = 'uint{}'.format(int_size)
             arr = np.empty(100, dtype=dtype)
             arr.fill(max_uint)
             arr -= np.arange(100, dtype=dtype)
 
             uint_hdu = fits.PrimaryHDU(data=arr)
             assert np.all(uint_hdu.data == arr)
-            assert uint_hdu.data.dtype.name == 'uint%d' % int_size
+            assert uint_hdu.data.dtype.name == 'uint{}'.format(int_size)
             assert 'BZERO' in uint_hdu.header
             assert uint_hdu.header['BZERO'] == (2 ** (int_size - 1))
 
-            filename = 'uint%d.fits' % int_size
+            filename = 'uint{}.fits'.format(int_size)
             uint_hdu.writeto(self.temp(filename))
 
             with fits.open(self.temp(filename), uint=True) as hdul:
                 new_uint_hdu = hdul[0]
                 assert np.all(new_uint_hdu.data == arr)
-                assert new_uint_hdu.data.dtype.name == 'uint%d' % int_size
+                assert new_uint_hdu.data.dtype.name == 'uint{}'.format(int_size)
                 assert 'BZERO' in new_uint_hdu.header
                 assert new_uint_hdu.header['BZERO'] == (2 ** (int_size - 1))
 
@@ -805,7 +803,7 @@ class TestImageFunctions(FitsTestCase):
         hdul = fits.open(self.data('fixed-1890.fits'))
         orig_data = hdul[0].data
         with ignore_warnings():
-            hdul.writeto(self.temp('test_new.fits'), clobber=True)
+            hdul.writeto(self.temp('test_new.fits'), overwrite=True)
         hdul.close()
         hdul = fits.open(self.temp('test_new.fits'))
         assert (hdul[0].data == orig_data).all()
@@ -816,7 +814,7 @@ class TestImageFunctions(FitsTestCase):
         # https://aeon.stsci.edu/ssb/trac/pyfits/ticket/84
         hdul = fits.open(self.data('fixed-1890.fits'))
         with ignore_warnings():
-            hdul.writeto(self.temp('test_new.fits'), clobber=True)
+            hdul.writeto(self.temp('test_new.fits'), overwrite=True)
         hdul.close()
         hdul = fits.open(self.temp('test_new.fits'))
         assert (hdul[0].data == orig_data).all()
@@ -825,7 +823,7 @@ class TestImageFunctions(FitsTestCase):
         # Test opening/closing/reopening a scaled file in update mode
         hdul = fits.open(self.data('fixed-1890.fits'),
                          do_not_scale_image_data=True)
-        hdul.writeto(self.temp('test_new.fits'), clobber=True,
+        hdul.writeto(self.temp('test_new.fits'), overwrite=True,
                      output_verify='silentfix')
         hdul.close()
         hdul = fits.open(self.temp('test_new.fits'))
@@ -992,6 +990,45 @@ class TestImageFunctions(FitsTestCase):
         hdul = fits.HDUList.fromstring(file_data)
         assert np.allclose(hdul[0].data, a)
 
+    def test_set_data(self):
+        """
+        Test data assignment - issue #5087
+        """
+
+        im = fits.ImageHDU()
+        ar = np.arange(12)
+        im.data = ar
+
+    def test_scale_bzero_with_int_data(self):
+        """
+        Regression test for https://github.com/astropy/astropy/issues/4600
+        """
+
+        a = np.arange(100, 200, dtype=np.int16)
+
+        hdu1 = fits.PrimaryHDU(data=a.copy())
+        hdu2 = fits.PrimaryHDU(data=a.copy())
+        # Previously the following line would throw a TypeError,
+        # now it should be identical to the integer bzero case
+        hdu1.scale('int16', bzero=99.0)
+        hdu2.scale('int16', bzero=99)
+        assert np.allclose(hdu1.data, hdu2.data)
+
+    def test_scale_back_uint_assignment(self):
+        """
+        Extend fix for #4600 to assignment to data
+
+        Suggested by:
+        https://github.com/astropy/astropy/pull/4602#issuecomment-208713748
+        """
+
+        a = np.arange(100, 200, dtype=np.uint16)
+        fits.PrimaryHDU(a).writeto(self.temp('test.fits'))
+        with fits.open(self.temp('test.fits'), mode="update",
+                       scale_back=True) as (hdu,):
+            hdu.data[:] = 0
+            assert np.allclose(hdu.data, 0)
+
 
 class TestCompressedImage(FitsTestCase):
     def test_empty(self):
@@ -1032,7 +1069,7 @@ class TestCompressedImage(FitsTestCase):
                                  compressionType=compression_type,
                                  quantizeLevel=quantize_level)
         ofd.append(chdu)
-        ofd.writeto(self.temp('test_new.fits'), clobber=True)
+        ofd.writeto(self.temp('test_new.fits'), overwrite=True)
         ofd.close()
         with fits.open(self.temp('test_new.fits')) as fd:
             assert (fd[1].data == data).all()
@@ -1211,7 +1248,7 @@ class TestCompressedImage(FitsTestCase):
         hdul = fits.open(self.temp('fixed-1890-z.fits'))
         orig_data = hdul[1].data
         with ignore_warnings():
-            hdul.writeto(self.temp('test_new.fits'), clobber=True)
+            hdul.writeto(self.temp('test_new.fits'), overwrite=True)
         hdul.close()
         hdul = fits.open(self.temp('test_new.fits'))
         assert (hdul[1].data == orig_data).all()
@@ -1222,7 +1259,7 @@ class TestCompressedImage(FitsTestCase):
         # https://aeon.stsci.edu/ssb/trac/pyfits/ticket/84
         hdul = fits.open(self.temp('fixed-1890-z.fits'))
         with ignore_warnings():
-            hdul.writeto(self.temp('test_new.fits'), clobber=True)
+            hdul.writeto(self.temp('test_new.fits'), overwrite=True)
         hdul.close()
         hdul = fits.open(self.temp('test_new.fits'))
         assert (hdul[1].data == orig_data).all()
@@ -1231,7 +1268,7 @@ class TestCompressedImage(FitsTestCase):
         # Test opening/closing/reopening a scaled file in update mode
         hdul = fits.open(self.temp('fixed-1890-z.fits'),
                          do_not_scale_image_data=True)
-        hdul.writeto(self.temp('test_new.fits'), clobber=True,
+        hdul.writeto(self.temp('test_new.fits'), overwrite=True,
                      output_verify='silentfix')
         hdul.close()
         hdul = fits.open(self.temp('test_new.fits'))
@@ -1304,7 +1341,7 @@ class TestCompressedImage(FitsTestCase):
         chdu2 = fits.CompImageHDU(data=noise, compressionType='GZIP_1',
                                   quantizeLevel=0.0)  # No quantization
         with ignore_warnings():
-            chdu2.writeto(self.temp('test.fits'), clobber=True)
+            chdu2.writeto(self.temp('test.fits'), overwrite=True)
 
         with fits.open(self.temp('test.fits')) as h:
             assert (noise == h[1].data).all()
@@ -1402,7 +1439,7 @@ class TestCompressedImage(FitsTestCase):
                 hdr[keyword] = value
                 assert len(w) == 1
                 assert str(w[0].message).startswith(
-                        "Keyword %r is reserved" % keyword)
+                        "Keyword {!r} is reserved".format(keyword))
                 assert keyword not in hdr
 
         with fits.open(self.data('comp.fits')) as hdul:
@@ -1554,14 +1591,42 @@ class TestCompressedImage(FitsTestCase):
             # technically it isn't invalid either :/
             assert hdul[1]._header.count('ZTENSION') == 2
 
+    def test_scale_bzero_with_compressed_int_data(self):
+        """
+        Regression test for https://github.com/astropy/astropy/issues/4600
+        and https://github.com/astropy/astropy/issues/4588
 
-def test_set_data():
-    """
-    Test data assignment - issue #5087
-    """
-    im = fits.ImageHDU()
-    ar = np.arange(12)
-    im.data = ar
+        Identical to test_scale_bzero_with_int_data() but uses a compressed
+        image.
+        """
+
+        a = np.arange(100, 200, dtype=np.int16)
+
+        hdu1 = fits.CompImageHDU(data=a.copy())
+        hdu2 = fits.CompImageHDU(data=a.copy())
+        # Previously the following line would throw a TypeError,
+        # now it should be identical to the integer bzero case
+        hdu1.scale('int16', bzero=99.0)
+        hdu2.scale('int16', bzero=99)
+        assert np.allclose(hdu1.data, hdu2.data)
+
+    def test_scale_back_compressed_uint_assignment(self):
+        """
+        Extend fix for #4600 to assignment to data
+
+        Identical to test_scale_back_uint_assignment() but uses a compressed
+        image.
+
+        Suggested by:
+        https://github.com/astropy/astropy/pull/4602#issuecomment-208713748
+        """
+
+        a = np.arange(100, 200, dtype=np.uint16)
+        fits.CompImageHDU(a).writeto(self.temp('test.fits'))
+        with fits.open(self.temp('test.fits'), mode="update",
+                       scale_back=True) as hdul:
+            hdul[1].data[:] = 0
+            assert np.allclose(hdul[1].data, 0)
 
 
 def test_comphdu_bscale(tmpdir):
@@ -1593,3 +1658,40 @@ def test_comphdu_bscale(tmpdir):
     # open again and verify
     hdus = fits.open(filename2)
     hdus[1].verify('exception')
+
+
+def test_scale_implicit_casting():
+
+    # Regression test for an issue that occurred because Numpy now does not
+    # allow implicit type casting during inplace operations.
+
+    hdu = fits.ImageHDU(np.array([1], dtype=np.int32))
+    hdu.scale(bzero=1.3)
+
+
+def test_bzero_implicit_casting_compressed():
+
+    # Regression test for an issue that occurred because Numpy now does not
+    # allow implicit type casting during inplace operations. Astropy is
+    # actually not able to produce a file that triggers the failure - the
+    # issue occurs when using unsigned integer types in the FITS file, in which
+    # case BZERO should be 32768. But if the keyword is stored as 32768.0, then
+    # it was possible to trigger the implicit casting error.
+
+    filename = os.path.join(os.path.dirname(__file__),
+                            'data', 'compressed_float_bzero.fits')
+
+    hdu = fits.open(filename)[1]
+    hdu.data
+
+def test_bzero_mishandled_info(tmpdir):
+    # Regression test for #5507:
+    # Calling HDUList.info() on a dataset which applies a zeropoint
+    # from BZERO but which astropy.io.fits does not think it needs
+    # to resize to a new dtype results in an AttributeError.
+    filename = tmpdir.join('floatimg_with_bzero.fits').strpath
+    hdu = fits.ImageHDU(np.zeros((10, 10)))
+    hdu.header['BZERO'] = 10
+    hdu.writeto(filename, clobber=True)
+    hdul = fits.open(filename)
+    hdul.info()

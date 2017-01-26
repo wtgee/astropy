@@ -15,8 +15,6 @@ from ...utils import OrderedDescriptorContainer
 from .. import representation
 from ..representation import REPRESENTATION_CLASSES
 
-NUMPY_LT_1P7 = [int(x) for x in np.__version__.split('.')[:2]] < [1, 7]
-
 
 def setup_function(func):
     func.REPRESENTATION_CLASSES_ORIG = deepcopy(REPRESENTATION_CLASSES)
@@ -158,6 +156,19 @@ def test_create_nodata_frames():
     assert f4.obstime in (FK4.get_frame_attr_names()['obstime'],
                           FK4.get_frame_attr_names()['equinox'])
 
+def test_no_data_nonscalar_frames():
+    from ..builtin_frames import AltAz
+    from astropy.time import Time
+    a1 = AltAz(obstime=Time('2012-01-01') + np.arange(10.) * u.day,
+               temperature=np.ones((3, 1)) * u.deg_C)
+    assert a1.obstime.shape == (3, 10)
+    assert a1.temperature.shape == (3, 10)
+    assert a1.shape == (3, 10)
+    with pytest.raises(ValueError) as exc:
+        AltAz(obstime=Time('2012-01-01') + np.arange(10.) * u.day,
+              temperature=np.ones((3,)) * u.deg_C)
+    assert 'inconsistent shapes' in str(exc)
+
 
 def test_frame_repr():
     from ..builtin_frames import ICRS, FK5
@@ -171,29 +182,19 @@ def test_frame_repr():
     i2 = ICRS(ra=1*u.deg, dec=2*u.deg)
     i3 = ICRS(ra=1*u.deg, dec=2*u.deg, distance=3*u.kpc)
 
-    if NUMPY_LT_1P7:
-        assert repr(i2).startswith("<ICRS Coordinate: (ra, dec) in deg")
-        assert repr(i3).startswith("<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)")
-
-    else:
-        assert repr(i2) == ('<ICRS Coordinate: (ra, dec) in deg\n'
-                            '    (1.0, 2.0)>')
-        assert repr(i3) == ('<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)\n'
-                            '    (1.0, 2.0, 3.0)>')
+    assert repr(i2) == ('<ICRS Coordinate: (ra, dec) in deg\n'
+                        '    ( 1.,  2.)>')
+    assert repr(i3) == ('<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)\n'
+                        '    ( 1.,  2.,  3.)>')
 
     # try with arrays
     i2 = ICRS(ra=[1.1,2.1]*u.deg, dec=[2.1,3.1]*u.deg)
     i3 = ICRS(ra=[1.1,2.1]*u.deg, dec=[-15.6,17.1]*u.deg, distance=[11.,21.]*u.kpc)
 
-    if NUMPY_LT_1P7:
-        assert repr(i2).startswith("<ICRS Coordinate: (ra, dec) in deg")
-        assert repr(i3).startswith("<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)")
-
-    else:
-        assert repr(i2) == ('<ICRS Coordinate: (ra, dec) in deg\n'
-                            '    [(1.1, 2.1), (2.1, 3.1)]>')
-        assert repr(i3) == ('<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)\n'
-                            '    [(1.1, -15.6, 11.0), (2.1, 17.1, 21.0)]>')
+    assert repr(i2) == ('<ICRS Coordinate: (ra, dec) in deg\n'
+                        '    [( 1.1,  2.1), ( 2.1,  3.1)]>')
+    assert repr(i3) == ('<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)\n'
+                        '    [( 1.1, -15.6,  11.), ( 2.1,  17.1,  21.)]>')
 
 
 def test_converting_units():
@@ -217,15 +218,13 @@ def test_converting_units():
 
     ri2 = ''.join(rexrepr.split(repr(i2)))
     ri4 = ''.join(rexrepr.split(repr(i4)))
-    if not NUMPY_LT_1P7:
-        assert ri2 == ri4
+    assert ri2 == ri4
     assert i2.data.lon.unit != i4.data.lon.unit  # Internal repr changed
 
     ri2_many = ''.join(rexrepr.split(repr(i2_many)))
     ri4_many = ''.join(rexrepr.split(repr(i4_many)))
 
-    if not NUMPY_LT_1P7:
-        assert ri2_many == ri4_many
+    assert ri2_many == ri4_many
     assert i2_many.data.lon.unit != i4_many.data.lon.unit  # Internal repr changed
 
     #but that *shouldn't* hold if we turn off units for the representation
@@ -353,6 +352,18 @@ def test_transform():
     assert_allclose(i1.ra, i2.ra)
     assert_allclose(i1.dec, i2.dec)
 
+
+def test_transform_to_nonscalar_nodata_frame():
+    # https://github.com/astropy/astropy/pull/5254#issuecomment-241592353
+    from ..builtin_frames import ICRS, FK5
+    from ...time import Time
+    times = Time('2016-08-23') + np.linspace(0,10,12)*u.day
+    coo1 = ICRS(ra=[[0.], [10.], [20.]]*u.deg,
+                dec=[[-30.], [30.], [60.]]*u.deg)
+    coo2 = coo1.transform_to(FK5(equinox=times))
+    assert coo2.shape == (3, 12)
+
+
 def test_sep():
     from ..builtin_frames import ICRS
 
@@ -388,8 +399,12 @@ def test_time_inputs():
         c = FK4(1 * u.deg, 2 * u.deg, obstime='hello')
     assert 'Invalid time input' in str(err)
 
-    #should work fine without a warning even with vector times not always working
-    FK4(1 * u.deg, 2 * u.deg, obstime=['J2000', 'J2001'])
+    # A vector time should work if the shapes match, but we don't automatically
+    # broadcast the basic data (just like time).
+    FK4([1, 2]* u.deg, [2, 3] * u.deg, obstime=['J2000', 'J2001'])
+    with pytest.raises(ValueError) as err:
+        FK4(1 * u.deg, 2 * u.deg, obstime=['J2000', 'J2001'])
+    assert 'shape' in str(err)
 
 
 def test_is_frame_attr_default():
@@ -649,7 +664,7 @@ def test_representation_subclass():
     # A similar issue then happened in __repr__ with subclasses of
     # SphericalRepresentation.
     assert repr(frame) == ("<FK5 Coordinate (equinox=J2000.000): (lon, lat) in deg\n"
-                           "    (32.0, 20.0)>")
+                           "    ( 32.,  20.)>")
 
     # A more subtle issue is when specifying a custom
     # UnitSphericalRepresentation subclass for the data and
@@ -696,3 +711,62 @@ def test_component_error_useful():
         i.lon  # lon is *not* the component name despite being the underlying representation's name
     assert "object has no attribute 'foobar'" in str(excinfo1.value)
     assert "object has no attribute 'lon'" in str(excinfo2.value)
+
+
+def test_cache_clear():
+    from ..builtin_frames import ICRS
+
+    i = ICRS(1*u.deg, 2*u.deg)
+
+    # Add an in frame units version of the rep to the cache.
+    repr(i)
+
+    assert len(i.cache['representation']) == 2
+
+    i.cache.clear()
+
+    assert len(i.cache['representation']) == 0
+
+
+def test_inplace_array():
+    from ..builtin_frames import ICRS
+
+    i = ICRS([[1, 2], [3, 4]]*u.deg, [[10, 20], [30, 40]]*u.deg)
+
+    # Add an in frame units version of the rep to the cache.
+    repr(i)
+
+    # Check that repr() has added a rep to the cache
+    assert len(i.cache['representation']) == 2
+
+    # Modify the data
+    i.data.lon[:, 0] = [100, 200]*u.deg
+
+    # Clear the cache
+    i.cache.clear()
+
+    # This will use a second (potentially cached rep)
+    assert_allclose(i.ra, [[100, 2], [200, 4]]*u.deg)
+    assert_allclose(i.dec, [[10, 20], [30, 40]]*u.deg)
+
+
+def test_inplace_change():
+    from ..builtin_frames import ICRS
+
+    i = ICRS(1*u.deg, 2*u.deg)
+
+    # Add an in frame units version of the rep to the cache.
+    repr(i)
+
+    # Check that repr() has added a rep to the cache
+    assert len(i.cache['representation']) == 2
+
+    # Modify the data
+    i.data.lon[()] = 10*u.deg
+
+    # Clear the cache
+    i.cache.clear()
+
+    # This will use a second (potentially cached rep)
+    assert i.ra == 10 * u.deg
+    assert i.dec == 2 * u.deg

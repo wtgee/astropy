@@ -16,10 +16,9 @@ from .column import (ASCIITNULL, FITS2NUMPY, ASCII2NUMPY, ASCII2STR, ColDefs,
                      _wrapx, _unwrapx, _makep, Delayed)
 from .util import decode_ascii, encode_ascii
 from ...extern.six import string_types
-from ...extern.six.moves import xrange
+from ...extern.six.moves import range, zip
 from ...utils import lazyproperty
 from ...utils.compat import suppress
-from ...utils.exceptions import AstropyDeprecationWarning
 
 
 class FITS_record(object):
@@ -52,16 +51,6 @@ class FITS_record(object):
            Used for subsetting the columns of the `FITS_rec` object.
         """
 
-        # For backward compatibility...
-        for arg in [('startColumn', 'start'), ('endColumn', 'end')]:
-            if arg[0] in kwargs:
-                warnings.warn('The %s argument to FITS_record is deprecated; '
-                              'use %s instead' % arg, AstropyDeprecationWarning)
-                if arg[0] == 'startColumn':
-                    start = kwargs[arg[0]]
-                elif arg[0] == 'endColumn':
-                    end = kwargs[arg[0]]
-
         self.array = input
         self.row = row
         if base:
@@ -78,7 +67,7 @@ class FITS_record(object):
             indx = _get_index(self.array.names, key)
 
             if indx < self.start or indx > self.end - 1:
-                raise KeyError("Key '%s' does not exist." % key)
+                raise KeyError("Key '{}' does not exist.".format(key))
         elif isinstance(key, slice):
             return type(self)(self.array, self.row, key.start, key.stop,
                               key.step, self)
@@ -92,12 +81,12 @@ class FITS_record(object):
 
     def __setitem__(self, key, value):
         if isinstance(key, string_types):
-            indx = _get_index(self.array._coldefs.names, key)
+            indx = _get_index(self.array.names, key)
 
             if indx < self.start or indx > self.end - 1:
-                raise KeyError("Key '%s' does not exist." % key)
+                raise KeyError("Key '{}' does not exist.".format(key))
         elif isinstance(key, slice):
-            for indx in xrange(slice.start, slice.stop, slice.step):
+            for indx in range(slice.start, slice.stop, slice.step):
                 indx = self._get_indx(indx)
                 self.array.field(indx)[self.row] = value
         else:
@@ -111,7 +100,7 @@ class FITS_record(object):
         return self[slice(start, end)]
 
     def __len__(self):
-        return len(xrange(self.start, self.end, self.step))
+        return len(range(self.start, self.end, self.step))
 
     def __repr__(self):
         """
@@ -119,9 +108,9 @@ class FITS_record(object):
         """
 
         outlist = []
-        for idx in xrange(len(self)):
+        for idx in range(len(self)):
             outlist.append(repr(self[idx]))
-        return '(%s)' % ', '.join(outlist)
+        return '({})'.format(', '.join(outlist))
 
     def field(self, field):
         """
@@ -287,7 +276,7 @@ class FITS_rec(np.recarray):
 
         .. note::
 
-            This was originally part of the `new_table` function in the table
+            This was originally part of the ``new_table`` function in the table
             module but was moved into a class method since most of its
             functionality always had more to do with initializing a `FITS_rec`
             object than anything else, and much of it also overlapped with
@@ -546,7 +535,7 @@ class FITS_rec(np.recarray):
             start = max(0, key.start or 0)
             end = min(end, start + len(value))
 
-            for idx in xrange(start, end):
+            for idx in range(start, end):
                 self.__setitem__(idx, value[idx - start])
             return
 
@@ -558,8 +547,8 @@ class FITS_rec(np.recarray):
                 for idx in range(self._nfields):
                     self.field(idx)[key] = value[idx]
             else:
-                raise ValueError('Input tuple or list required to have %s '
-                                 'elements.' % self._nfields)
+                raise ValueError('Input tuple or list required to have {} '
+                                 'elements.'.format(self._nfields))
         else:
             raise TypeError('Assignment requires a FITS_record, tuple, or '
                             'list as input.')
@@ -647,10 +636,10 @@ class FITS_rec(np.recarray):
     def names(self):
         """List of column names."""
 
-        if hasattr(self, '_coldefs') and self._coldefs is not None:
-            return self._coldefs.names
-        elif self.dtype.fields:
+        if self.dtype.fields:
             return list(self.dtype.names)
+        elif getattr(self, '_coldefs', None) is not None:
+            return self._coldefs.names
         else:
             return None
 
@@ -658,7 +647,7 @@ class FITS_rec(np.recarray):
     def formats(self):
         """List of column FITS formats."""
 
-        if hasattr(self, '_coldefs') and self._coldefs is not None:
+        if getattr(self, '_coldefs', None) is not None:
             return self._coldefs.formats
 
         return None
@@ -698,8 +687,8 @@ class FITS_rec(np.recarray):
 
         if format.dtype.itemsize == 0:
             warnings.warn(
-                'Field %r has a repeat count of 0 in its format code, '
-                'indicating an empty field.' % key)
+                'Field {!r} has a repeat count of 0 in its format code, '
+                'indicating an empty field.'.format(key))
             return np.array([], dtype=format.dtype)
 
         # If field's base is a FITS_rec, we can run into trouble because it
@@ -805,8 +794,8 @@ class FITS_rec(np.recarray):
 
         if raw_data is None:
             raise IOError(
-                "Could not find heap data for the %r variable-length "
-                "array column." % column.name)
+                "Could not find heap data for the {!r} variable-length "
+                "array column.".format(column.name))
 
         for idx in range(len(self)):
             offset = field[idx, 1] + self._heapoffset
@@ -857,16 +846,24 @@ class FITS_rec(np.recarray):
         dummy = np.char.ljust(field, format.width)
         dummy = np.char.replace(dummy, encode_ascii('D'), encode_ascii('E'))
         null_fill = encode_ascii(str(ASCIITNULL).rjust(format.width))
+
+        # Convert all fields equal to the TNULL value (nullval) to empty fields.
+        # TODO: These fields really should be conerted to NaN or something else undefined.
+        # Currently they are converted to empty fields, which are then set to zero.
         dummy = np.where(np.char.strip(dummy) == nullval, null_fill, dummy)
+
+        # always replace empty fields, see https://github.com/astropy/astropy/pull/5394
+        if nullval != b'':
+            dummy = np.where(np.char.strip(dummy) == b'', null_fill, dummy)
 
         try:
             dummy = np.array(dummy, dtype=recformat)
         except ValueError as exc:
-            indx = self._coldefs.names.index(column.name)
+            indx = self.names.index(column.name)
             raise ValueError(
-                '%s; the header may be missing the necessary TNULL%d '
-                'keyword or the table contains invalid data' %
-                (exc, indx + 1))
+                '{}; the header may be missing the necessary TNULL{} '
+                'keyword or the table contains invalid data'.format(
+                    exc, indx + 1))
 
         return dummy
 
@@ -884,7 +881,7 @@ class FITS_rec(np.recarray):
         (_str, _bool, _number, _scale, _zero, bscale, bzero, dim) = \
             self._get_scale_factors(column)
 
-        indx = self._coldefs.names.index(column.name)
+        indx = self.names.index(column.name)
 
         # ASCII table, convert strings to numbers
         # TODO:
@@ -922,10 +919,10 @@ class FITS_rec(np.recarray):
                     actual_nitems = field.shape[1]
                 if nitems > actual_nitems:
                     warnings.warn(
-                        'TDIM%d value %s does not fit with the size of '
-                        'the array items (%d).  TDIM%d will be ignored.'
-                        % (indx + 1, self._coldefs.dims[indx],
-                           actual_nitems, indx + 1))
+                        'TDIM{} value {:d} does not fit with the size of '
+                        'the array items ({:d}).  TDIM{:d} will be ignored.'
+                        .format(indx + 1, self._coldefs[indx].dims,
+                                actual_nitems, indx + 1))
                     dim = None
 
         # further conversion for both ASCII and binary tables
@@ -989,7 +986,7 @@ class FITS_rec(np.recarray):
                 field = field[:, :nitems]
             if _str:
                 fmt = field.dtype.char
-                dtype = ('|%s%d' % (fmt, dim[-1]), dim[:-1])
+                dtype = ('|{}{}'.format(fmt, dim[-1]), dim[:-1])
                 field.dtype = dtype
             else:
                 field.shape = (field.shape[0],) + dim
@@ -1196,7 +1193,7 @@ class FITS_rec(np.recarray):
                     "cannot be encoded as ASCII as required by FITS, starting "
                     "at the index {1!r} of the column, and the index {2} of "
                     "the string at that location.".format(
-                        self._coldefs.names[col_idx],
+                        self._coldefs[col_idx].name,
                         exc.index[0] if len(exc.index) == 1 else exc.index,
                         exc.start))
         else:
@@ -1222,7 +1219,7 @@ class FITS_rec(np.recarray):
 
         starts = self._coldefs.starts[:]
         spans = self._coldefs.spans
-        format = self._coldefs.formats[col_idx]
+        format = self._coldefs[col_idx].format
 
         # The the index of the "end" column of the record, beyond
         # which we can't write
@@ -1235,24 +1232,25 @@ class FITS_rec(np.recarray):
             lead = 0
 
         if lead < 0:
-            warnings.warn('Column %r starting point overlaps the previous '
-                          'column.' % (col_idx + 1))
+            warnings.warn('Column {!r} starting point overlaps the previous '
+                          'column.'.format(col_idx + 1))
 
         trail = starts[col_idx + 1] - starts[col_idx] - spans[col_idx]
 
         if trail < 0:
-            warnings.warn('Column %r ending point overlaps the next '
-                          'column.' % (col_idx + 1))
+            warnings.warn('Column {!r} ending point overlaps the next '
+                          'column.'.format(col_idx + 1))
 
         # TODO: It would be nice if these string column formatting
         # details were left to a specialized class, as is the case
         # with FormatX and FormatP
+        print(format)
         if 'A' in format:
-            _pc = '%-'
+            _pc = '{:'
         else:
-            _pc = '%'
+            _pc = '{:>'
 
-        fmt = ''.join([_pc, format[1:], ASCII2STR[format[0]],
+        fmt = ''.join([_pc, format[1:], ASCII2STR[format[0]], '}',
                        (' ' * trail)])
 
         # Even if the format precision is 0, we should output a decimal point
@@ -1264,11 +1262,11 @@ class FITS_rec(np.recarray):
         # not using numarray.strings's num2char because the
         # result is not allowed to expand (as C/Python does).
         for jdx, value in enumerate(input_field):
-            value = fmt % value
+            value = fmt.format(value)
             if len(value) > starts[col_idx + 1] - starts[col_idx]:
                 raise ValueError(
-                    "Value %r does not fit into the output's itemsize of "
-                    "%s." % (value, spans[col_idx]))
+                    "Value {!r} does not fit into the output's itemsize of "
+                    "{}.".format(value, spans[col_idx]))
 
             if trailing_decimal and value[0] == ' ':
                 # We have some extra space in the field for the trailing

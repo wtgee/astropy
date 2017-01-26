@@ -9,7 +9,7 @@ from __future__ import (absolute_import, division, print_function,
 import inspect
 import traceback
 
-from ...extern.six.moves import queue
+from ...extern.six.moves import queue, range
 from ...extern.six.moves.urllib.request import urlopen
 from ...extern.six.moves import xmlrpc_client as xmlrpc
 from ...extern.six import StringIO
@@ -27,7 +27,7 @@ def internet_on():
         try:
             urlopen('http://google.com', timeout=1.)
             return True
-        except:
+        except Exception:
             return False
 
 __all__ = ["SAMPMsgReplierWrapper"]
@@ -56,7 +56,7 @@ class _ServerProxyPoolMethod(object):
         self.__name = name
 
     def __getattr__(self, name):
-        return _ServerProxyPoolMethod(self.__proxies, "%s.%s" % (self.__name, name))
+        return _ServerProxyPoolMethod(self.__proxies, "{}.{}".format(self.__name, name))
 
     def __call__(self, *args, **kwrds):
         proxy = self.__proxies.get()
@@ -117,7 +117,7 @@ class SAMPMsgReplierWrapper(object):
                         self.cli.hub.reply(self.cli.get_private_key(), args[2],
                                            {"samp.status": SAMP_STATUS_ERROR,
                                             "samp.result": result})
-                except:
+                except Exception:
                     err = StringIO()
                     traceback.print_exc(file=err)
                     txt = err.getvalue()
@@ -145,7 +145,7 @@ class _HubAsClientMethod(object):
         self.__name = name
 
     def __getattr__(self, name):
-        return _HubAsClientMethod(self.__send, "%s.%s" % (self.__name, name))
+        return _HubAsClientMethod(self.__send, "{}.{}".format(self.__name, name))
 
     def __call__(self, *args):
         return self.__send(self.__name, args)

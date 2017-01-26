@@ -10,7 +10,8 @@ astronomy.
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
-import itertools
+import copy
+import operator
 from datetime import datetime
 from collections import defaultdict
 
@@ -25,6 +26,7 @@ from ..utils.compat.misc import override__dir__
 from ..utils.data_info import MixinInfo, data_info_factory
 from ..utils.compat.numpy import broadcast_to
 from ..extern import six
+from ..extern.six.moves import zip
 from .utils import day_frac
 from .formats import (TIME_FORMATS, TIME_DELTA_FORMATS,
                       TimeJD, TimeUnique, TimeAstropyTime, TimeDatetime)
@@ -100,6 +102,9 @@ class TimeInfo(MixinInfo):
     """
     attrs_from_parent = set(['unit'])  # unit is read-only and None
     _supports_indexing = True
+    _represent_as_dict_attrs = ('jd1', 'jd2', 'format', 'scale', 'precision',
+                                'in_subfmt', 'out_subfmt', 'location',
+                                '_delta_ut1_utc', '_delta_tdb_tt')
 
     @property
     def unit(self):
@@ -110,6 +115,40 @@ class TimeInfo(MixinInfo):
                           funcs=[getattr(np, stat) for stat in MixinInfo._stats]))
     # When Time has mean, std, min, max methods:
     # funcs = [lambda x: getattr(x, stat)() for stat_name in MixinInfo._stats])
+
+    def _construct_from_dict(self, map):
+        format = map.pop('format')
+        delta_ut1_utc = map.pop('_delta_ut1_utc', None)
+        delta_tdb_tt = map.pop('_delta_tdb_tt', None)
+
+        map['format'] = 'jd'
+        map['val'] = map.pop('jd1')
+        map['val2'] = map.pop('jd2')
+
+        out = self._parent_cls(**map)
+        out.format = format
+
+        if delta_ut1_utc is not None:
+            out._delta_ut1_utc = delta_ut1_utc
+        if delta_tdb_tt is not None:
+            out._delta_tdb_tt = delta_tdb_tt
+
+        return out
+
+class TimeDeltaInfo(TimeInfo):
+    _represent_as_dict_attrs = ('jd1', 'jd2', 'format', 'scale')
+
+    def _construct_from_dict(self, map):
+        format = map.pop('format')
+
+        map['format'] = 'jd'
+        map['val'] = map.pop('jd1')
+        map['val2'] = map.pop('jd2')
+
+        out = self._parent_cls(**map)
+        out.format = format
+
+        return out
 
 
 class Time(ShapedLikeNDArray):
@@ -219,7 +258,7 @@ class Time(ShapedLikeNDArray):
                 # check the location can be broadcast to self's shape.
                 self.location = broadcast_to(self.location, self.shape,
                                              subok=True)
-            except:
+            except Exception:
                 raise ValueError('The location with shape {0} cannot be '
                                  'broadcast against time with shape {1}. '
                                  'Typically, either give a single location or '
@@ -409,7 +448,7 @@ class Time(ShapedLikeNDArray):
 
         # Transform the jd1,2 pairs through the chain of scale xforms.
         jd1, jd2 = self._time.jd1, self._time.jd2
-        for sys1, sys2 in six.moves.zip(xforms[:-1], xforms[1:]):
+        for sys1, sys2 in zip(xforms[:-1], xforms[1:]):
             # Some xforms require an additional delta_ argument that is
             # provided through Time methods.  These values may be supplied by
             # the user or computed based on available approximations.  The
@@ -518,13 +557,6 @@ class Time(ShapedLikeNDArray):
                 else:
                     reshaped.append(val)
 
-    def __bool__(self):
-        """Any time should evaluate to True, except when it is empty."""
-        return self.size > 0
-
-    # In python2, __bool__ is not defined.
-    __nonzero__ = __bool__
-
     def _shaped_like_input(self, value):
         return value if self._time.jd1.shape else value.item()
 
@@ -551,7 +583,7 @@ class Time(ShapedLikeNDArray):
         # the ``value`` attribute is cached.
         return getattr(self, self.format)
 
-    def light_travel_time(self, skycoord, kind='barycentric', location=None):
+    def light_travel_time(self, skycoord, kind='barycentric', location=None, ephemeris=None):
         """Light travel time correction to the barycentre or heliocentre.
 
         The frame transformations used to calculate the location of the solar
@@ -564,18 +596,22 @@ class Time(ShapedLikeNDArray):
 
         Parameters
         ----------
-        skycoord: `~astropy.coordinates.SkyCoord`
+        skycoord : `~astropy.coordinates.SkyCoord`
             The sky location to calculate the correction for.
-        kind: str, optional
+        kind : str, optional
             ``'barycentric'`` (default) or ``'heliocentric'``
-        location: `~astropy.coordinates.EarthLocation`, optional
+        location : `~astropy.coordinates.EarthLocation`, optional
             The location of the observatory to calculate the correction for.
             If no location is given, the ``location`` attribute of the Time
             object is used
+        ephemeris : str, optional
+            Solar system ephemeris to use (e.g., 'builtin', 'jpl'). By default,
+            use the one set with ``astropy.coordinates.solar_system_ephemeris.set``.
+            For more information, see `~astropy.coordinates.solar_system_ephemeris`.
 
         Returns
         -------
-        time_offset: `~astropy.time.TimeDelta`
+        time_offset : `~astropy.time.TimeDelta`
             The time offset between the barycentre or Heliocentre and Earth,
             in TDB seconds.  Should be added to the original time to get the
             time in the Solar system barycentre or the Heliocentre.
@@ -593,7 +629,7 @@ class Time(ShapedLikeNDArray):
             location = self.location
 
         from ..coordinates import (UnitSphericalRepresentation, CartesianRepresentation,
-                                   HCRS, ICRS, GCRS, EarthLocation, SkyCoord)
+                                   HCRS, ICRS, GCRS, solar_system_ephemeris)
 
         # ensure sky location is ICRS compatible
         if not skycoord.is_transformable_to(ICRS()):
@@ -602,18 +638,19 @@ class Time(ShapedLikeNDArray):
         # get location of observatory in ITRS coordinates at this Time
         try:
             itrs = location.get_itrs(obstime=self)
-        except:
+        except Exception:
             raise ValueError("Supplied location does not have a valid `get_itrs` method")
 
-        if kind.lower() == 'heliocentric':
-            # convert to heliocentric coordinates, aligned with ICRS
-            cpos = itrs.transform_to(HCRS(obstime=self)).cartesian.xyz
-        else:
-            # first we need to convert to GCRS coordinates with the correct
-            # obstime, since ICRS coordinates have no frame time
-            gcrs_coo = itrs.transform_to(GCRS(obstime=self))
-            # convert to barycentric (BCRS) coordinates, aligned with ICRS
-            cpos = gcrs_coo.transform_to(ICRS()).cartesian.xyz
+        with solar_system_ephemeris.set(ephemeris):
+            if kind.lower() == 'heliocentric':
+                # convert to heliocentric coordinates, aligned with ICRS
+                cpos = itrs.transform_to(HCRS(obstime=self)).cartesian.xyz
+            else:
+                # first we need to convert to GCRS coordinates with the correct
+                # obstime, since ICRS coordinates have no frame time
+                gcrs_coo = itrs.transform_to(GCRS(obstime=self))
+                # convert to barycentric (BCRS) coordinates, aligned with ICRS
+                cpos = gcrs_coo.transform_to(ICRS()).cartesian.xyz
 
         # get unit ICRS vector to star
         spos = (skycoord.icrs.represent_as(UnitSphericalRepresentation).
@@ -731,7 +768,7 @@ class Time(ShapedLikeNDArray):
         tm : Time object
             Copy of this object
         """
-        return self._apply(format=format, method='copy')
+        return self._apply('copy', format=format)
 
     def replicate(self, format=None, copy=False):
         """
@@ -762,60 +799,78 @@ class Time(ShapedLikeNDArray):
         tm : Time object
             Replica of this object
         """
-        return self._apply(format=format, method='copy' if copy else None)
+        return self._apply('copy' if copy else 'replicate', format=format)
 
-    def _apply(self, method=None, *args, **kwargs):
+    def _apply(self, method, *args, **kwargs):
         """Create a new time object, possibly applying a method to the arrays.
 
         Parameters
         ----------
-        method : str, optional
-            If given, the method is applied to the internal ``jd1`` and ``jd2``
-            arrays, as well as to possible ``location``, ``_delta_ut1_utc``,
-            and ``_delta_tdb_tt`` arrays, broadcasting the latter as required.
-            Example methods: ``copy``, ``__getitem__``, ``reshape``.
+        method : str or callable
+            If string, can be 'replicate'  or the name of a relevant
+            `~numpy.ndarray` method. In the former case, a new time instance
+            with unchanged internal data is created, while in the latter the
+            method is applied to the internal ``jd1`` and ``jd2`` arrays, as
+            well as to possible ``location``, ``_delta_ut1_utc``, and
+            ``_delta_tdb_tt`` arrays.
+            If a callable, it is directly applied to the above arrays.
+            Examples: 'copy', '__getitem__', 'reshape', `~numpy.broadcast_to`.
         args : tuple
             Any positional arguments for ``method``.
         kwargs : dict
             Any keyword arguments for ``method``.  If the ``format`` keyword
             argument is present, this will be used as the Time format of the
             replica.
+
+        Examples
+        --------
+        Some ways this is used internally::
+
+            copy : ``_apply('copy')``
+            replicate : ``_apply('replicate')``
+            reshape : ``_apply('reshape', new_shape)``
+            index or slice : ``_apply('__getitem__', item)``
+            broadcast : ``_apply(np.broadcast, shape=new_shape)``
         """
         new_format = kwargs.pop('format', None)
         if new_format is None:
             new_format = self.format
 
+        if callable(method):
+            apply_method = lambda array: method(array, *args, **kwargs)
+        else:
+            if method == 'replicate':
+                apply_method = None
+            else:
+                apply_method = operator.methodcaller(method, *args, **kwargs)
+
         jd1, jd2 = self._time.jd1, self._time.jd2
-        if method is not None:
-            jd1 = getattr(jd1, method)(*args, **kwargs)
-            jd2 = getattr(jd2, method)(*args, **kwargs)
+        if apply_method:
+            jd1 = apply_method(jd1)
+            jd2 = apply_method(jd2)
 
         tm = super(Time, self.__class__).__new__(self.__class__)
         tm._time = TimeJD(jd1, jd2, self.scale, self.precision,
                           self.in_subfmt, self.out_subfmt, from_jd=True)
         # Optional ndarray attributes.
-        for attr in ('_delta_ut1_utc', '_delta_tdb_tt', 'location'):
+        for attr in ('_delta_ut1_utc', '_delta_tdb_tt', 'location',
+                     'precision', 'in_subfmt', 'out_subfmt'):
             try:
                 val = getattr(self, attr)
             except AttributeError:
                 continue
 
-            # Apply the method to any value arrays (though skip if there is only
-            # a single element and the method would return a view, since in
-            # that case nothing would change).
-            if method is not None and val is not None:
-                if method == 'copy' or method == 'flatten' and val.size == 1:
-                    val = val.copy()
-
-                elif val.size > 1:
-                    val = getattr(val, method)(*args, **kwargs)
-
-            setattr(tm, attr, val)
-
-        for attr in ('precision', 'in_subfmt', 'out_subfmt'):
-            val = getattr(self, attr)
-            if method in ('copy', 'flatten') and hasattr(val, 'copy'):
-                val = val.copy()
+            if apply_method:
+                # Apply the method to any value arrays (though skip if there is
+                # only a single element and the method would return a view,
+                # since in that case nothing would change).
+                if getattr(val, 'size', 1) > 1:
+                    val = apply_method(val)
+                elif method == 'copy' or method == 'flatten':
+                    # flatten should copy also for a single element array, but
+                    # we cannot use it directly for array scalars, since it
+                    # always returns a one-dimensional array. So, just copy.
+                    val = copy.copy(val)
 
             setattr(tm, attr, val)
 
@@ -856,21 +911,6 @@ class Time(ShapedLikeNDArray):
         copy of the JD arrays.
         """
         return self.copy()
-
-    def __iter__(self):
-        if self.isscalar:
-            raise TypeError('scalar {0!r} object is not iterable.'.format(
-                self.__class__.__name__))
-
-        def time_iter():
-            try:
-                for idx in itertools.count():
-                    yield self[idx]
-            except IndexError:
-                # Results in StopIteration
-                pass
-
-        return time_iter()
 
     def _advanced_index(self, indices, axis=None, keepdims=False):
         """Turn argmin, argmax output into an advanced index.
@@ -1095,7 +1135,7 @@ class Time(ShapedLikeNDArray):
             try:
                 # check the value can be broadcast to the shape of self.
                 val = broadcast_to(val, self.shape, subok=True)
-            except:
+            except Exception:
                 raise ValueError('Attribute shape must match or be '
                                  'broadcastable to that of Time object. '
                                  'Typically, give either a single value or '
@@ -1249,17 +1289,11 @@ class Time(ShapedLikeNDArray):
     delta_tdb_tt = property(_get_delta_tdb_tt, _set_delta_tdb_tt)
     """TDB - TT time scale offset"""
 
-    def __len__(self):
-        if self.isscalar:
-            raise TypeError("Scalar {0} object has no len()"
-                            .format(self.__class__.__name__))
-        return len(self.jd1)
-
     def __sub__(self, other):
         if not isinstance(other, Time):
             try:
                 other = TimeDelta(other)
-            except:
+            except Exception:
                 raise OperandTypeError(self, other, '-')
 
         # Tdelta - something is dealt with in TimeDelta, so we have
@@ -1307,7 +1341,7 @@ class Time(ShapedLikeNDArray):
         if not isinstance(other, Time):
             try:
                 other = TimeDelta(other)
-            except:
+            except Exception:
                 raise OperandTypeError(self, other, '+')
 
         # Tdelta + something is dealt with in TimeDelta, so we have
@@ -1356,7 +1390,7 @@ class Time(ShapedLikeNDArray):
         if other.__class__ is not self.__class__:
             try:
                 other = self.__class__(other, scale=self.scale)
-            except:
+            except Exception:
                 raise OperandTypeError(self, other, op)
 
         if(self.scale is not None and self.scale not in other.SCALES or
@@ -1458,6 +1492,8 @@ class TimeDelta(Time):
     FORMATS = TIME_DELTA_FORMATS
     """Dict of time delta formats."""
 
+    info = TimeDeltaInfo()
+
     def __init__(self, val, val2=None, format=None, scale=None, copy=False):
         if isinstance(val, TimeDelta):
             if scale is not None:
@@ -1468,7 +1504,7 @@ class TimeDelta(Time):
                     val = val.to(u.day)
                     if val2 is not None:
                         val2 = val2.to(u.day)
-                except:
+                except Exception:
                     raise ValueError('Only Quantities with Time units can '
                                      'be used to initiate {0} instances .'
                                      .format(self.__class__.__name__))
@@ -1517,7 +1553,7 @@ class TimeDelta(Time):
         else:
             try:
                 other = TimeDelta(other)
-            except:
+            except Exception:
                 raise OperandTypeError(self, other, '+')
 
         # the scales should be compatible (e.g., cannot convert TDB to TAI)
@@ -1549,7 +1585,7 @@ class TimeDelta(Time):
         else:
             try:
                 other = TimeDelta(other)
-            except:
+            except Exception:
                 raise OperandTypeError(self, other, '-')
 
         # the scales should be compatible (e.g., cannot convert TDB to TAI)
@@ -1598,7 +1634,7 @@ class TimeDelta(Time):
 
         try:   # convert to straight float if dimensionless quantity
             other = other.to(1)
-        except:
+        except Exception:
             pass
 
         try:
@@ -1607,7 +1643,7 @@ class TimeDelta(Time):
         except Exception as err:  # try downgrading self to a quantity
             try:
                 return self.to(u.day) * other
-            except:
+            except Exception:
                 raise err
 
         if self.format != 'jd':
@@ -1631,7 +1667,7 @@ class TimeDelta(Time):
         # cannot do __mul__(1./other) as that looses precision
         try:
             other = other.to(1)
-        except:
+        except Exception:
             pass
 
         try:   # convert to straight float if dimensionless quantity
@@ -1640,7 +1676,7 @@ class TimeDelta(Time):
         except Exception as err:  # try downgrading self to a quantity
             try:
                 return self.to(u.day) / other
-            except:
+            except Exception:
                 raise err
 
         if self.format != 'jd':

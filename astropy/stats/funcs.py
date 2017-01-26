@@ -11,9 +11,11 @@ access.
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
+import math
+
 import numpy as np
 
-from ..extern.six.moves import xrange
+from ..extern.six.moves import range
 
 
 __all__ = ['binom_conf_interval', 'binned_binom_proportion',
@@ -31,14 +33,14 @@ __doctest_requires__ = {'binom_conf_interval': ['scipy.special'],
 
 gaussian_sigma_to_fwhm = 2.0 * np.sqrt(2.0 * np.log(2.0))
 """
-Factor with which to multiply Gaussian 1-sigma standard deviation(s) to
-convert them to full width at half maximum(s).
+Factor with which to multiply Gaussian 1-sigma standard deviation to
+convert it to full width at half maximum (FWHM).
 """
 
 gaussian_fwhm_to_sigma = 1. / gaussian_sigma_to_fwhm
 """
-Factor with which to multiply Gaussian full width at half maximum(s) to
-convert them to 1-sigma standard deviation(s).
+Factor with which to multiply Gaussian full width at half maximum (FWHM)
+to convert it to 1-sigma standard deviation.
 """
 
 
@@ -712,7 +714,7 @@ def poisson_conf_interval(n, interval='root-n', sigma=1, background=0,
         conf_interval = np.vstack(conf_interval)
     else:
         raise ValueError("Invalid method for Poisson confidence intervals: "
-                         "%s" % interval)
+                         "{}".format(interval))
     return conf_interval
 
 
@@ -775,7 +777,7 @@ def median_absolute_deviation(a, axis=None):
 
 
 def mad_std(data, axis=None):
-    """
+    r"""
     Calculate a robust standard deviation using the `median absolute
     deviation (MAD)
     <http://en.wikipedia.org/wiki/Median_absolute_deviation>`_.
@@ -784,8 +786,8 @@ def mad_std(data, axis=None):
 
     .. math::
 
-        \\sigma \\approx \\frac{\\textrm{MAD}}{\Phi^{-1}(3/4)}
-            \\approx 1.4826 \ \\textrm{MAD}
+        \sigma \approx \frac{\textrm{MAD}}{\Phi^{-1}(3/4)}
+            \approx 1.4826 \ \textrm{MAD}
 
     where :math:`\Phi^{-1}(P)` is the normal inverse cumulative
     distribution function evaluated at probability :math:`P = 3/4`.
@@ -825,7 +827,7 @@ def mad_std(data, axis=None):
 
 
 def biweight_location(a, c=6.0, M=None, axis=None):
-    """
+    r"""
     Compute the biweight location.
 
     The biweight location is a robust statistic for determining the
@@ -833,7 +835,7 @@ def biweight_location(a, c=6.0, M=None, axis=None):
 
     .. math::
 
-        C_{bl}= M+\\frac{\Sigma_{\|u_i\|<1} (x_i-M)(1-u_i^2)^2}
+        C_{bl}= M+\frac{\Sigma_{\|u_i\|<1} (x_i-M)(1-u_i^2)^2}
         {\Sigma_{\|u_i\|<1} (1-u_i^2)^2}
 
     where :math:`M` is the sample median (or the input initial guess)
@@ -841,7 +843,7 @@ def biweight_location(a, c=6.0, M=None, axis=None):
 
     .. math::
 
-        u_{i} = \\frac{(x_i-M)}{c\ MAD}
+        u_{i} = \frac{(x_i-M)}{c\ MAD}
 
     where :math:`c` is the tuning constant and :math:`MAD` is the median
     absolute deviation.
@@ -913,7 +915,7 @@ def biweight_location(a, c=6.0, M=None, axis=None):
 
 
 def biweight_midvariance(a, c=9.0, M=None, axis=None):
-    """
+    r"""
     Compute the biweight midvariance.
 
     The biweight midvariance is a robust statistic for determining the
@@ -922,14 +924,14 @@ def biweight_midvariance(a, c=9.0, M=None, axis=None):
 
     .. math::
 
-      C_{bl}= (n')^{1/2} \\frac{[\Sigma_{|u_i|<1} (x_i-M)^2(1-u_i^2)^4]^{0.5}}
+      C_{bl}= (n')^{1/2} \frac{[\Sigma_{|u_i|<1} (x_i-M)^2(1-u_i^2)^4]^{0.5}}
       {|\Sigma_{|u_i|<1} (1-u_i^2)(1-5u_i^2)|}
 
     where :math:`u_i` is given by
 
     .. math::
 
-        u_{i} = \\frac{(x_i-M)}{c MAD}
+        u_{i} = \frac{(x_i-M)}{c MAD}
 
     where :math:`c` is the tuning constant and :math:`MAD` is the median
     absolute deviation.  The midvariance tuning constant ``c`` is
@@ -1164,7 +1166,7 @@ def bootstrap(data, bootnum=100, samples=None, bootfunc=None):
     # create empty boot array
     boot = np.empty(resultdims)
 
-    for i in xrange(bootnum):
+    for i in range(bootnum):
         bootarr = np.random.randint(low=0, high=data.shape[0], size=samples)
         if bootfunc is None:
             boot[i] = data[bootarr]
@@ -1197,23 +1199,39 @@ def _scipy_kraft_burrows_nousek(N, B, CL):
 
     Notes
     -----
-    Requires `scipy`. This implementation will cause Overflow Errors for
-    about N > 100 (the exact limit depends on details of how scipy was
-    compiled).  See `~astropy.stats.mpmath_poisson_upper_limit` for an
-    implementation that is slower, but can deal with arbitrarily high
-    numbers since it is based on the `mpmath <http://mpmath.org/>`_
-    library.
+    Requires `scipy`. This implementation will cause Overflow Errors for about
+    N > 100 (the exact limit depends on details of how scipy was compiled).
+    See `~astropy.stats.mpmath_poisson_upper_limit` for an implementation that
+    is slower, but can deal with arbitrarily high numbers since it is based on
+    the `mpmath <http://mpmath.org/>`_ library.
     '''
+
     from scipy.optimize import brentq
     from scipy.integrate import quad
-    from scipy.special import factorial
+
+    from math import exp
 
     def eqn8(N, B):
-        n = np.arange(N + 1)
-        return 1. / (np.exp(-B) * np.sum(np.power(B, n) / factorial(n)))
+        n = np.arange(N + 1, dtype=np.float64)
+        # Create an array containing the factorials. scipy.special.factorial
+        # requires SciPy 0.14 (#5064) therefore this is calculated by using
+        # numpy.cumprod. This could be replaced by factorial again as soon as
+        # older SciPy are not supported anymore but the cumprod alternative
+        # might also be a bit faster.
+        factorial_n = np.ones(n.shape, dtype=np.float64)
+        np.cumprod(n[1:], out=factorial_n[1:])
+        return 1. / (exp(-B) * np.sum(np.power(B, n) / factorial_n))
+
+    # The parameters of eqn8 do not vary between calls so we can calculate the
+    # result once and reuse it. The same is True for the factorial of N.
+    # eqn7 is called hundred times so "caching" these values yields a
+    # significant speedup (factor 10).
+    eqn8_res = eqn8(N, B)
+    factorial_N = float(math.factorial(N))
 
     def eqn7(S, N, B):
-        return eqn8(N, B) * (np.exp(-S - B) * (S + B)**N / factorial(N))
+        SpB = S + B
+        return eqn8_res * (exp(-SpB) * SpB**N / factorial_N)
 
     def eqn9_left(S_min, S_max, N, B):
         return quad(eqn7, S_min, S_max, args=(N, B), limit=500)
@@ -1281,8 +1299,12 @@ def _mpmath_kraft_burrows_nousek(N, B, CL):
         sumterms = [power(B, n) / factorial(n) for n in range(int(N) + 1)]
         return 1. / (exp(-B) * fsum(sumterms))
 
+    eqn8_res = eqn8(N, B)
+    factorial_N = factorial(N)
+
     def eqn7(S, N, B):
-        return eqn8(N, B) * (exp(-S-B) * (S + B)**N / factorial(N))
+        SpB = S + B
+        return eqn8_res * (exp(-SpB) * SpB**N / factorial_N)
 
     def eqn9_left(S_min, S_max, N, B):
         def eqn7NB(S):

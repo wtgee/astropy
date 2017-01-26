@@ -28,10 +28,11 @@ from collections import OrderedDict
 
 from ..extern import six
 from ..utils.compat import NUMPY_LT_1_8
+from ..extern.six.moves import zip, cStringIO as StringIO
 
 # Tuple of filterwarnings kwargs to ignore when calling info
-IGNORE_WARNINGS = (dict(category=RuntimeWarning,
-                        module=r'numpy\.lib\.nanfunctions'),)
+IGNORE_WARNINGS = (dict(category=RuntimeWarning, message='All-NaN|'
+                        'Mean of empty slice|Degrees of freedom <= 0'),)
 
 STRING_TYPE_NAMES = {(False, 'S'): 'str',  # not PY3
                      (False, 'U'): 'unicode',
@@ -57,18 +58,18 @@ def dtype_info_name(dtype):
 
     Parameters
     ----------
-    dtype: str, np.dtype, type
+    dtype : str, np.dtype, type
         Input dtype as an object that can be converted via np.dtype()
 
     Returns
     -------
-    dtype_info_name: str
+    dtype_info_name : str
         String name of ``dtype``
     """
     dtype = np.dtype(dtype)
     if dtype.kind in ('S', 'U'):
         length = re.search(r'(\d+)', dtype.str).group(1)
-        type_name = STRING_TYPE_NAMES[(six.PY3, dtype.kind)]
+        type_name = STRING_TYPE_NAMES[(not six.PY2, dtype.kind)]
         out = type_name + length
     else:
         out = dtype.name
@@ -96,14 +97,14 @@ def data_info_factory(names, funcs):
 
     Parameters
     ----------
-    names: list
+    names : list
         List of information attribute names
-    funcs: list
+    funcs : list
         List of functions that compute the corresponding information attribute
 
     Returns
     -------
-    func: function
+    func : function
         Function that can be used as a data info option
     """
     def func(dat):
@@ -114,13 +115,34 @@ def data_info_factory(names, funcs):
                     out = getattr(dat, func)()
                 else:
                     out = func(dat)
-            except:
+            except Exception:
                 outs.append('--')
             else:
                 outs.append(str(out))
 
         return OrderedDict(zip(names, outs))
     return func
+
+
+def _get_obj_attrs_map(obj, attrs):
+    """
+    Get the values for object ``attrs`` and return as a dict.  This
+    ignores any attributes that are None and in Py2 converts any unicode
+    attribute names or values to str.  In the context of serializing the
+    supported core astropy classes this conversion will succeed and results
+    in more succinct and less python-specific YAML.
+    """
+    out = {}
+    for attr in attrs:
+        val = getattr(obj, attr, None)
+
+        if val is not None:
+            if six.PY2:
+                attr = str(attr)
+                if isinstance(val, six.text_type):
+                    val = str(val)
+            out[attr] = val
+    return out
 
 
 def _get_data_attribute(dat, attr=None):
@@ -163,6 +185,7 @@ class DataInfo(object):
     attr_names = set(['name', 'unit', 'dtype', 'format', 'description', 'meta'])
     _attrs_no_copy = set()
     _info_summary_attrs = ('dtype', 'shape', 'unit', 'format', 'description', 'class')
+    _represent_as_dict_attrs= ()
     _parent = None
 
     def __init__(self, bound=False):
@@ -175,6 +198,7 @@ class DataInfo(object):
         if instance is None:
             # This is an unbound descriptor on the class
             info = self
+            info._parent_cls = owner_cls
         else:
             info = instance.__dict__.get('info')
             if info is None:
@@ -254,6 +278,16 @@ class DataInfo(object):
 
         self._attrs[attr] = value
 
+    def _represent_as_dict(self):
+        """
+        Get the values for the parent ``attrs`` and return as a dict.
+        This is typically used for serializing the parent.
+        """
+        return _get_obj_attrs_map(self._parent, self._represent_as_dict_attrs)
+
+    def _construct_from_dict(self, map):
+        return self._parent_cls(**map)
+
     info_summary_attributes = staticmethod(
         data_info_factory(names=_info_summary_attrs,
                           funcs=[partial(_get_data_attribute, attr=attr)
@@ -309,15 +343,15 @@ class DataInfo(object):
 
         Parameters
         ----------
-        option: str, function, list of (str or function)
+        option : str, function, list of (str or function)
             Info option (default='attributes')
-        out: file-like object, None
+        out : file-like object, None
             Output destination (default=sys.stdout).  If None then the
             OrderedDict with information attributes is returned
 
         Returns
         -------
-        info: OrderedDict if out==None else None
+        info : OrderedDict if out==None else None
         """
         if out == '':
             out = sys.stdout
@@ -347,7 +381,7 @@ class DataInfo(object):
         else:
             try:
                 n_bad = np.count_nonzero(np.isinf(dat) | np.isnan(dat))
-            except:
+            except Exception:
                 n_bad = 0
         info['n_bad'] = n_bad
 
@@ -367,7 +401,7 @@ class DataInfo(object):
         if self._parent is None:
             return super(DataInfo, self).__repr__()
 
-        out = six.moves.cStringIO()
+        out = StringIO()
         self.__call__(out=out)
         return out.getvalue()
 
@@ -482,7 +516,18 @@ class BaseColumnInfo(DataInfo):
 
 
 class MixinInfo(BaseColumnInfo):
-    pass
+
+    def __setattr__(self, attr, value):
+        # For mixin columns that live within a table, rename the column in the
+        # table when setting the name attribute.  This mirrors the same
+        # functionality in the BaseColumn class.
+        if attr == 'name' and self.parent_table is not None:
+            from ..table.np_utils import fix_column_name
+            new_name = fix_column_name(value)  # Ensure col name is numpy compatible
+            self.parent_table.columns._rename_column(self.name, new_name)
+
+        super(MixinInfo, self).__setattr__(attr, value)
+
 
 class ParentDtypeInfo(MixinInfo):
     """Mixin that gets info.dtype from parent"""

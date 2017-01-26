@@ -86,9 +86,9 @@ example if it must be non-negative).  See the example in
 
 ::
 
-    from astropy.modeling import FittableModel, Parameter
+    from astropy.modeling import Fittable1DModel, Parameter
 
-    class Gaussian1D(FittableModel):
+    class Gaussian1D(Fittable1DModel):
         inputs = ('x',)
         outputs = ('y',)
 
@@ -209,9 +209,9 @@ Full example
 
 .. code-block:: python
 
-    from astropy.modeling import FittableModel, Parameter
+    from astropy.modeling import Fittable1DModel, Parameter
 
-    class Gaussian1D(FittableModel):
+    class Gaussian1D(Fittable1DModel):
         amplitude = Parameter()
         mean = Parameter()
         stddev = Parameter()
@@ -244,10 +244,10 @@ input``.
 
 .. code-block:: python
 
-    from astropy.modeling import FittableModel, Parameter
+    from astropy.modeling import Fittable1DModel, Parameter
     import numpy as np
 
-    class LineModel(FittableModel):
+    class LineModel(Fittable1DModel):
         slope = Parameter()
         intercept = Parameter()
         linear = True
@@ -327,6 +327,34 @@ necessary::
                                              ineqcons=self.ineqcons)
         return model_copy
 
+Defining a Plugin Fitter
+------------------------
+
+`astropy.modeling` includes a plugin mechanism which allows fitters 
+defined outside of astropy's core to be inserted into the 
+`astropy.modeling.fitting` namespace through the use of entry points. 
+Entry points are references to importable objects. A tutorial on defining
+entry points can be found in `setuptools' documentation <http://setuptools.readthedocs.io/en/latest/setuptools.html#dynamic-discovery-of-services-and-plugins>`_.
+Plugin fitters must to extend from the `~astropy.modeling.fitting.Fitter` 
+base class. For the fitter to be discovered and inserted into 
+`astropy.modeling.fitting` the entry points must be inserted into 
+the `astropy.modeling` entry point group
+
+.. doctest-skip::
+
+    setup(
+          # ...
+          entry_points = {'astropy.modeling': 'PluginFitterName = fitter_module:PlugFitterClass'}
+    )
+
+This would allow users to import the ``PlugFitterName`` through `astropy.modeling.fitting` by
+
+.. doctest-skip::
+
+    from astropy.modeling.fitting import PlugFitterName
+
+One project which uses this functionality is `Saba <https://saba.readthedocs.io/>`_ 
+and be can be used as a reference. 
 
 Using a Custom Statistic Function
 =================================

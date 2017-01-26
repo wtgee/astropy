@@ -20,7 +20,7 @@ from ...tests.helper import raises, pytest
 from ...utils import isiterable, minversion
 from ... import units as u
 from ...units.quantity import _UNIT_NOT_INITIALISED
-from ...extern.six.moves import xrange
+from ...extern.six.moves import range
 from ...extern.six.moves import cPickle as pickle
 from ...extern import six
 
@@ -29,7 +29,7 @@ try:
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from distutils.version import LooseVersion
-    MATPLOTLIB_LT_14 = LooseVersion(matplotlib.__version__) < LooseVersion("1.4")
+    MATPLOTLIB_LT_15 = LooseVersion(matplotlib.__version__) < LooseVersion("1.5")
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
@@ -719,11 +719,11 @@ class TestQuantityDisplay(object):
         from ...units.quantity import conf
 
         q2scalar = u.Quantity(1.5e14, 'm/s')
-        assert self.scalarintq._repr_latex_() == '$1 \\; \\mathrm{m}$'
-        assert self.scalarfloatq._repr_latex_() == '$1.3 \\; \\mathrm{m}$'
+        assert self.scalarintq._repr_latex_() == r'$1 \; \mathrm{m}$'
+        assert self.scalarfloatq._repr_latex_() == r'$1.3 \; \mathrm{m}$'
         assert (q2scalar._repr_latex_() ==
-                '$1.5 \\times 10^{14} \\; \\mathrm{\\frac{m}{s}}$')
-        assert self.arrq._repr_latex_() == '$[1,~2.3,~8.9] \; \mathrm{m}$'
+                r'$1.5 \times 10^{14} \; \mathrm{\frac{m}{s}}$')
+        assert self.arrq._repr_latex_() == r'$[1,~2.3,~8.9] \; \mathrm{m}$'
 
         qmed = np.arange(100)*u.m
         qbig = np.arange(1000)*u.m
@@ -848,7 +848,7 @@ def test_arrays():
     assert qkpc1x == qkpcx1
 
     # can also create from lists, will auto-convert to arrays
-    qsec = u.Quantity(list(xrange(10)), u.second)
+    qsec = u.Quantity(list(range(10)), u.second)
     assert isinstance(qsec.value, np.ndarray)
 
     # quantity math should work with arrays
@@ -1055,19 +1055,52 @@ def test_quantity_pickelability():
     assert q1.unit == q2.unit
 
 
-def test_quantity_from_string():
-    with pytest.raises(TypeError):
-        q = u.Quantity(u.m * "5")
-        # the reverse should also fail once #1408 is in
+def test_quantity_initialisation_from_string():
+    q = u.Quantity('1')
+    assert q.unit == u.dimensionless_unscaled
+    assert q.value == 1.
+    q = u.Quantity('1.5 m/s')
+    assert q.unit == u.m/u.s
+    assert q.value == 1.5
+    assert u.Unit(q) == u.Unit('1.5 m/s')
+    q = u.Quantity('.5 m')
+    assert q == u.Quantity(0.5, u.m)
+    q = u.Quantity('-1e1km')
+    assert q == u.Quantity(-10, u.km)
+    q = u.Quantity('-1e+1km')
+    assert q == u.Quantity(-10, u.km)
+    q = u.Quantity('+.5km')
+    assert q == u.Quantity(.5, u.km)
+    q = u.Quantity('+5e-1km')
+    assert q == u.Quantity(.5, u.km)
+    q = u.Quantity('5', u.m)
+    assert q == u.Quantity(5., u.m)
+    q = u.Quantity('5 km', u.m)
+    assert q.value == 5000.
+    assert q.unit == u.m
+    q = u.Quantity('5Em')
+    assert q == u.Quantity(5., u.Em)
 
     with pytest.raises(TypeError):
-        q = u.Quantity('5', u.m)
-
+        u.Quantity('')
     with pytest.raises(TypeError):
-        q = u.Quantity(['5'], u.m)
-
+        u.Quantity('m')
     with pytest.raises(TypeError):
-        q = u.Quantity(np.array(['5']), u.m)
+        u.Quantity('1.2.3 deg')
+    with pytest.raises(TypeError):
+        u.Quantity('1+deg')
+    with pytest.raises(TypeError):
+        u.Quantity('1-2deg')
+    with pytest.raises(TypeError):
+        u.Quantity('1.2e-13.3m')
+    with pytest.raises(TypeError):
+        u.Quantity(['5'])
+    with pytest.raises(TypeError):
+        u.Quantity(np.array(['5']))
+    with pytest.raises(ValueError):
+        u.Quantity('5E')
+    with pytest.raises(ValueError):
+        u.Quantity('5 foo')
 
 
 def test_unsupported():
@@ -1188,8 +1221,67 @@ def test_repr_array_of_quantity():
     assert str(a) == '[<Quantity 1.0 m> <Quantity 2.0 s>]'
 
 
+class TestSpecificTypeQuantity(object):
+    def setup(self):
+        class Length(u.SpecificTypeQuantity):
+            _equivalent_unit = u.m
+
+        class Length2(Length):
+            _default_unit = u.m
+
+        class Length3(Length):
+            _unit = u.m
+
+        self.Length = Length
+        self.Length2 = Length2
+        self.Length3 = Length3
+
+    def test_creation(self):
+        l = self.Length(np.arange(10.)*u.km)
+        assert type(l) is self.Length
+        with pytest.raises(u.UnitTypeError):
+            self.Length(np.arange(10.) * u.hour)
+
+        with pytest.raises(u.UnitTypeError):
+            self.Length(np.arange(10.))
+
+        l2 = self.Length2(np.arange(5.))
+        assert type(l2) is self.Length2
+        assert l2._default_unit is self.Length2._default_unit
+
+        with pytest.raises(u.UnitTypeError):
+            self.Length3(np.arange(10.))
+
+    def test_view(self):
+        l = (np.arange(5.) * u.km).view(self.Length)
+        assert type(l) is self.Length
+        with pytest.raises(u.UnitTypeError):
+            (np.arange(5.) * u.s).view(self.Length)
+
+        v = np.arange(5.).view(self.Length)
+        assert type(v) is self.Length
+        assert v._unit is None
+
+        l3 = np.ones((2,2)).view(self.Length3)
+        assert type(l3) is self.Length3
+        assert l3.unit is self.Length3._unit
+
+    def test_operation_precedence_and_fallback(self):
+        l = self.Length(np.arange(5.)*u.cm)
+        sum1 = l + 1.*u.m
+        assert type(sum1) is self.Length
+        sum2 = 1.*u.km + l
+        assert type(sum2) is self.Length
+        sum3 = l + l
+        assert type(sum3) is self.Length
+        res1 = l * (1.*u.m)
+        assert type(res1) is u.Quantity
+        res2 = l * l
+        assert type(res2) is u.Quantity
+
+
 @pytest.mark.skipif('not HAS_MATPLOTLIB')
-@pytest.mark.xfail('MATPLOTLIB_LT_14')
+@pytest.mark.xfail('MATPLOTLIB_LT_15')
 class TestQuantityMatplotlib(object):
     """Test if passing matplotlib quantities works.
 

@@ -9,12 +9,12 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from ..extern import six
 from ..extern.six.moves import zip
-if six.PY2:
-    import cmath
 
 import inspect
+import operator
 import textwrap
 import warnings
+
 import numpy as np
 
 from ..utils.decorators import lazyproperty, deprecated
@@ -24,7 +24,9 @@ from .utils import (is_effectively_unity, sanitize_scale, validate_power,
                     resolve_fractions)
 from . import format as unit_format
 
-# TODO: Support function units, e.g. log(x), ln(x)
+if six.PY2:
+    import cmath
+
 
 __all__ = [
     'UnitsError', 'UnitsWarning', 'UnitConversionError', 'UnitTypeError',
@@ -111,14 +113,26 @@ class _UnitRegistry(object):
     Manages a registry of the enabled units.
     """
     def __init__(self, init=[], equivalencies=[]):
-        if isinstance(init, _UnitRegistry):
-            equivalencies = init.equivalencies
-            init = init.all_units
 
-        self._reset_units()
-        self._reset_equivalencies()
-        self.add_enabled_units(init)
-        self.add_enabled_equivalencies(equivalencies)
+        if isinstance(init, _UnitRegistry):
+            # If passed another registry we don't need to rebuild everything.
+            # but because these are mutable types we don't want to create
+            # conflicts so everything needs to be copied.
+            self._equivalencies = init._equivalencies.copy()
+            self._all_units = init._all_units.copy()
+            self._registry = init._registry.copy()
+            self._non_prefix_units = init._non_prefix_units.copy()
+            # The physical type is a dictionary containing sets as values.
+            # All of these must be copied otherwise we could alter the old
+            # registry.
+            self._by_physical_type = {k: v.copy() for k, v in
+                                      six.iteritems(init._by_physical_type)}
+
+        else:
+            self._reset_units()
+            self._reset_equivalencies()
+            self.add_enabled_units(init)
+            self.add_enabled_equivalencies(equivalencies)
 
     def _reset_units(self):
         self._all_units = set()
@@ -207,9 +221,7 @@ class _UnitRegistry(object):
         ----------
         unit : UnitBase instance
         """
-        return self._by_physical_type.get(
-            unit._get_physical_type_id(),
-            set())
+        return self._by_physical_type.get(unit._get_physical_type_id(), set())
 
     @property
     def equivalencies(self):
@@ -258,9 +270,7 @@ class _UnitRegistry(object):
 class _UnitContext(object):
     def __init__(self, init=[], equivalencies=[]):
         _unit_registries.append(
-            _UnitRegistry(
-                init=init,
-                equivalencies=equivalencies))
+            _UnitRegistry(init=init, equivalencies=equivalencies))
 
     def __enter__(self):
         pass
@@ -411,7 +421,7 @@ def set_enabled_equivalencies(equivalencies):
         <Quantity (-1+1.2246063538223773e-16j)>
     """
     # get a context with a new registry, using all units of the current one
-    context = _UnitContext(get_current_unit_registry().all_units)
+    context = _UnitContext(get_current_unit_registry())
     # in this new current registry, enable the equivalencies requested
     get_current_unit_registry().set_enabled_equivalencies(equivalencies)
     return context
@@ -461,6 +471,7 @@ class UnitConversionError(UnitsError, ValueError):
     interpreting units in terms of other units.
     """
 
+
 class UnitTypeError(UnitsError, TypeError):
     """
     Used specifically for errors in setting to units not allowed by a class.
@@ -509,14 +520,14 @@ class UnitBase(object):
 
     def __bytes__(self):
         """Return string representation for unit"""
-        return unit_format.Generic.to_string(self).encode('ascii')
+        return unit_format.Generic.to_string(self).encode('unicode_escape')
     if six.PY2:
         __str__ = __bytes__
 
     def __unicode__(self):
         """Return string representation for unit"""
         return unit_format.Generic.to_string(self)
-    if six.PY3:
+    if not six.PY2:
         __str__ = __unicode__
 
     def __repr__(self):
@@ -661,8 +672,8 @@ class UnitBase(object):
 
         try:
             # Cannot handle this as Unit.  Here, m cannot be a Quantity,
-            # so we make it into one, fasttracking when it does not have a unit,
-            # for the common case of <array> / <unit>.
+            # so we make it into one, fasttracking when it does not have a
+            # unit, for the common case of <array> / <unit>.
             from .quantity import Quantity
             if hasattr(m, 'unit'):
                 result = Quantity(m)
@@ -810,7 +821,7 @@ class UnitBase(object):
                     try:
                         (other/unit).decompose([a])
                         return True
-                    except:
+                    except Exception:
                         pass
                 else:
                     if(a._is_equivalent(unit) and b._is_equivalent(other) or
@@ -893,7 +904,7 @@ class UnitBase(object):
                         try:
                             return lambda v: b(self._get_converter(
                                 tunit, equivalencies=equivalencies)(v))
-                        except:
+                        except Exception:
                             pass
 
             raise exc
@@ -1102,7 +1113,7 @@ class UnitBase(object):
                 cached_results[key] = results
                 return results
 
-        partial_results.sort(key=lambda x: x[0])
+        partial_results.sort(key=operator.itemgetter(0))
 
         # ...we have to recurse and try to further compose
         results = []
@@ -1120,7 +1131,7 @@ class UnitBase(object):
                     (len(subcomposed.bases), subcomposed, tunit))
 
         if len(results):
-            results.sort(key=lambda x: x[0])
+            results.sort(key=operator.itemgetter(0))
 
             min_length = results[0][0]
             subresults = set()
@@ -1709,7 +1720,7 @@ class UnrecognizedUnit(IrreducibleUnit):
 
     def __unicode__(self):
         return self.name
-    if six.PY3:
+    if not six.PY2:
         __str__ = __unicode__
 
     def to_string(self, format=None):
@@ -1804,7 +1815,7 @@ class _UnitMetaClass(InheritDocstrings):
                 format = unit_format.Generic
 
             f = unit_format.get_format(format)
-            if six.PY3 and isinstance(s, bytes):
+            if not six.PY2 and isinstance(s, bytes):
                 s = s.decode('ascii')
 
             try:

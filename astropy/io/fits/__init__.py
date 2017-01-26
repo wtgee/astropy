@@ -46,6 +46,12 @@ class Conf(_config.ConfigNamespace):
         'FITS files. This generally provides better performance, especially '
         'for large files, but may affect performance in I/O-heavy '
         'applications.')
+    lazy_load_hdus = _config.ConfigItem(
+        True,
+        'If True, use lazy loading of HDUs when opening FITS files by '
+        'default; that is fits.open() will only seek for and read HDUs on '
+        'demand rather than reading all HDUs at once.  See the documentation '
+        'for fits.open() for more datails.')
     enable_uint = _config.ConfigItem(
         True,
         'If True, default to recognizing the convention for representing '
@@ -73,7 +79,6 @@ from .hdu import *
 from .hdu.groups import GroupData
 from .hdu.hdulist import fitsopen as open
 from .hdu.image import Section
-from .hdu.table import new_table
 from .header import Header
 from .verify import VerifyError
 
@@ -81,4 +86,4 @@ from .verify import VerifyError
 __all__ = (['Conf', 'conf'] + card.__all__ + column.__all__ +
            convenience.__all__ + hdu.__all__ +
            ['FITS_record', 'FITS_rec', 'GroupData', 'open', 'Section',
-            'new_table', 'Header', 'VerifyError', 'conf'])
+            'Header', 'VerifyError', 'conf'])

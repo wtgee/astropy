@@ -3,8 +3,7 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from ..extern import six
 from ..extern.six import text_type
-from ..extern.six.moves import zip as izip
-from ..extern.six.moves import xrange
+from ..extern.six.moves import zip, range
 
 import os
 import sys
@@ -26,7 +25,7 @@ def default_format_func(format_, val):
         return text_type(val)
 
 
-_format_funcs = {None: default_format_func}
+_format_funcs = {}
 
 
 ### The first three functions are helpers for _auto_format_func
@@ -51,69 +50,97 @@ def _possible_string_format_functions(format_):
     yield lambda format_, val: format_.format(val)
     yield lambda format_, val: format_ % val
 
-def _auto_format_func(format_, val):
-    """Format ``val`` according to ``format_`` for a plain format specifier,
-    old- or new-style format strings, or using a user supplied function.
-    More importantly, determine and cache (in _format_funcs) a function
-    that will do this subsequently.  In this way this complicated logic is
-    only done for the first value.
-
-    Returns the formatted value.
+def get_auto_format_func(
+        col_name=None,
+        possible_string_format_functions=_possible_string_format_functions):
     """
-    if format_ in _format_funcs:
-        return _format_funcs[format_](format_, val)
+    Return a wrapped ``auto_format_func`` function which is used in
+    formatting table columns.  This is primarily an internal function but
+    gets used directly in other parts of astropy, e.g. `astropy.io.ascii`.
 
-    if six.callable(format_):
-        format_func = lambda format_, val: format_(val)
-        try:
-            out = format_func(format_, val)
-            if not isinstance(out, six.string_types):
-                raise ValueError('Format function for value {0} returned {1} '
-                                 'instead of string type'
-                                 .format(val, type(val)))
-        except Exception as err:
-            # For a masked element, the format function call likely failed
-            # to handle it.  Just return the string representation for now,
-            # and retry when a non-masked value comes along.
+    Parameters
+    ----------
+    col_name : str, optional
+        Column name (default=None)
+
+    possible_string_format_functions : func, optional
+        Function that yields possible string formatting functions
+        (default=internal function to do this).
+
+    Returns
+    -------
+    Wrapped ``auto_format_func`` function
+    """
+
+    def _auto_format_func(format_, val):
+        """Format ``val`` according to ``format_`` for a plain format specifier,
+        old- or new-style format strings, or using a user supplied function.
+        More importantly, determine and cache (in _format_funcs) a function
+        that will do this subsequently.  In this way this complicated logic is
+        only done for the first value.
+
+        Returns the formatted value.
+        """
+        if format_ is None:
+            return default_format_func(format_, val)
+
+        format_key = (format_, col_name)
+        if format_key in _format_funcs:
+            return _format_funcs[format_key](format_, val)
+
+        if six.callable(format_):
+            format_func = lambda format_, val: format_(val)
+            try:
+                out = format_func(format_, val)
+                if not isinstance(out, six.string_types):
+                    raise ValueError('Format function for value {0} returned {1} '
+                                     'instead of string type'
+                                     .format(val, type(val)))
+            except Exception as err:
+                # For a masked element, the format function call likely failed
+                # to handle it.  Just return the string representation for now,
+                # and retry when a non-masked value comes along.
+                if val is np.ma.masked:
+                    return str(val)
+
+                raise ValueError('Format function for value {0} failed: {1}'
+                                 .format(val, err))
+            # If the user-supplied function handles formatting masked elements, use
+            # it directly.  Otherwise, wrap it in a function that traps them.
+            try:
+                format_func(format_, np.ma.masked)
+            except Exception:
+                format_func = _use_str_for_masked_values(format_func)
+        else:
+            # For a masked element, we cannot set string-based format functions yet,
+            # as all tests below will fail.  Just return the string representation
+            # of masked for now, and retry when a non-masked value comes along.
             if val is np.ma.masked:
                 return str(val)
 
-            raise ValueError('Format function for value {0} failed: {1}'
-                             .format(val, err))
-        # If the user-supplied function handles formatting masked elements, use
-        # it directly.  Otherwise, wrap it in a function that traps them.
-        try:
-            format_func(format_, np.ma.masked)
-        except:
-            format_func = _use_str_for_masked_values(format_func)
-    else:
-        # For a masked element, we cannot set string-based format functions yet,
-        # as all tests below will fail.  Just return the string representation
-        # of masked for now, and retry when a non-masked value comes along.
-        if val is np.ma.masked:
-            return str(val)
-
-        for format_func in _possible_string_format_functions(format_):
-            try:
-                # Does this string format method work?
-                out = format_func(format_, val)
-                # Require that the format statement actually did something.
-                assert out != format_
-            except:
-                continue
+            for format_func in possible_string_format_functions(format_):
+                try:
+                    # Does this string format method work?
+                    out = format_func(format_, val)
+                    # Require that the format statement actually did something.
+                    assert out != format_
+                except Exception:
+                    continue
+                else:
+                    break
             else:
-                break
-        else:
-            # None of the possible string functions passed muster.
-            raise ValueError('Unable to parse format string {0}'
-                             .format(format_))
+                # None of the possible string functions passed muster.
+                raise ValueError('Unable to parse format string {0}'
+                                 .format(format_))
 
-        # String-based format functions will fail on masked elements;
-        # wrap them in a function that traps them.
-        format_func = _use_str_for_masked_values(format_func)
+            # String-based format functions will fail on masked elements;
+            # wrap them in a function that traps them.
+            format_func = _use_str_for_masked_values(format_func)
 
-    _format_funcs[format_] = format_func
-    return out
+        _format_funcs[format_key] = format_func
+        return out
+
+    return _auto_format_func
 
 
 class TableFormatter(object):
@@ -361,8 +388,41 @@ class TableFormatter(object):
         n_print2 = max_lines // 2
         n_rows = len(col)
 
+        # This block of code is responsible for producing the function that
+        # will format values for this column.  The ``format_func`` function
+        # takes two args (col_format, val) and returns the string-formatted
+        # version.  Some points to understand:
+        #
+        # - col_format could itself be the formatting function, so it will
+        #    actually end up being called with itself as the first arg.  In
+        #    this case the function is expected to ignore its first arg.
+        #
+        # - auto_format_func is a function that gets called on the first
+        #    column value that is being formatted.  It then determines an
+        #    appropriate formatting function given the actual value to be
+        #    formatted.  This might be deterministic or it might involve
+        #    try/except.  The latter allows for different string formatting
+        #    options like %f or {:5.3f}.  When auto_format_func is called it:
+
+        #    1. Caches the function in the _format_funcs dict so for subsequent
+        #       values the right function is called right away.
+        #    2. Returns the formatted value.
+        #
+        # - possible_string_format_functions is a function that yields a
+        #    succession of functions that might successfully format the
+        #    value.  There is a default, but Mixin methods can override this.
+        #    See Quantity for an example.
+        #
+        # - get_auto_format_func() returns a wrapped version of auto_format_func
+        #    with the column name and possible_string_format_functions as
+        #    enclosed variables.
         col_format = col.info.format or getattr(col.info, 'default_format', None)
-        format_func = _format_funcs.get(col_format, _auto_format_func)
+        pssf = (getattr(col.info, 'possible_string_format_functions', None) or
+                _possible_string_format_functions)
+        auto_format_func = get_auto_format_func(col.info.name, pssf)
+        format_key = (col_format, col.info.name)
+        format_func = _format_funcs.get(format_key, auto_format_func)
+
         if len(col) > max_lines:
             if show_length is None:
                 show_length = True
@@ -456,7 +516,7 @@ class TableFormatter(object):
         cols = []
 
         if show_unit is None:
-            show_unit = any([col.info.unit for col in six.itervalues(table.columns)])
+            show_unit = any(col.info.unit for col in six.itervalues(table.columns))
 
         # Coerce align into a correctly-sized list of alignments (if possible)
         n_cols = len(table.columns)
@@ -472,7 +532,7 @@ class TableFormatter(object):
             raise TypeError('align keyword must be str or list or tuple (got {0})'
                             .format(type(align)))
 
-        for align_, col in izip(align, table.columns.values()):
+        for align_, col in zip(align, table.columns.values()):
             lines, outs = self._pformat_col(col, max_lines, show_name=show_name,
                                             show_unit=show_unit, show_dtype=show_dtype,
                                             align=align_)
@@ -597,12 +657,12 @@ class TableFormatter(object):
             if showlines:  # Don't always show the table (e.g. after help)
                 try:
                     os.system('cls' if os.name == 'nt' else 'clear')
-                except:
+                except Exception:
                     pass  # No worries if clear screen call fails
                 lines = tabcol[i0:i1].pformat(**kwargs)
                 colors = ('red' if i < n_header else 'default'
-                          for i in xrange(len(lines)))
-                for color, line in izip(colors, lines):
+                          for i in range(len(lines)))
+                for color, line in zip(colors, lines):
                     color_print(line, color)
             showlines = True
             print()
@@ -611,7 +671,7 @@ class TableFormatter(object):
             while True:
                 try:
                     key = inkey().lower()
-                except:
+                except Exception:
                     print("\n")
                     log.error('Console does not support getting a character'
                               ' as required by more().  Use pprint() instead.')

@@ -1,3 +1,5 @@
+.. _doc_standard_units:
+
 Standard units
 ==============
 
@@ -45,6 +47,80 @@ all the existing predefined units of a given type::
     t            | 1000 kg         | tonne                            ,
     u            | 1.66054e-27 kg  | Da, Dalton                       ,
   ]
+
+
+Prefixes
+--------
+
+Most units can be used with prefixes, with both the standard SI prefixes and
+the IEEE 1514 binary prefixes (for ``bit`` and ``byte``) supported:
+
++------------------------------+
+|  Available decimal prefixes  |
++--------+-------------+-------+
+| Symbol |    Prefix   | Value |
++========+=============+=======+
+|    Y   |    yotta-   |  1e24 |
++--------+-------------+-------+
+|    Z   |    zetta-   |  1e21 |
++--------+-------------+-------+
+|    E   |     exa-    |  1e18 |
++--------+-------------+-------+
+|    P   |    peta-    |  1e15 |
++--------+-------------+-------+
+|    T   |    tera-    |  1e12 |
++--------+-------------+-------+
+|    G   |    giga-    |  1e9  |
++--------+-------------+-------+
+|    M   |    mega-    |  1e6  |
++--------+-------------+-------+
+|    k   |    kilo-    |  1e3  |
++--------+-------------+-------+
+|    h   |    hecto-   |  1e2  |
++--------+-------------+-------+
+|   da   | deka-, deca |  1e1  |
++--------+-------------+-------+
+|    d   |    deci-    |  1e-1 |
++--------+-------------+-------+
+|    c   |    centi-   |  1e-2 |
++--------+-------------+-------+
+|    m   |    milli-   |  1e-3 |
++--------+-------------+-------+
+|    u   |    micro-   |  1e-6 |
++--------+-------------+-------+
+|    n   |    nano-    |  1e-9 |
++--------+-------------+-------+
+|    p   |    pico-    | 1e-12 |
++--------+-------------+-------+
+|    f   |    femto-   | 1e-15 |
++--------+-------------+-------+
+|    a   |    atto-    | 1e-18 |
++--------+-------------+-------+
+|    z   |    zepto-   | 1e-21 |
++--------+-------------+-------+
+|    y   |    yocto-   | 1e-24 |
++--------+-------------+-------+
+
++---------------------------+
+| Available binary prefixes |
++--------+--------+---------+
+| Symbol | Prefix |  Value  |
++========+========+=========+
+|   Ki   |  kibi- | 2 ** 10 |
++--------+--------+---------+
+|   Mi   |  mebi- | 2 ** 20 |
++--------+--------+---------+
+|   Gi   |  gibi- | 2 ** 30 |
++--------+--------+---------+
+|   Ti   |  tebi- | 2 ** 40 |
++--------+--------+---------+
+|   Pi   |  pebi- | 2 ** 50 |
++--------+--------+---------+
+|   Ei   |  exbi- | 2 ** 60 |
++--------+--------+---------+
+
+
+.. _doc_dimensionless_unit:
 
 The dimensionless unit
 ----------------------
@@ -141,13 +217,15 @@ enable additional units::
     >>> from astropy import units as u
     >>> from astropy.units import imperial
     >>> with imperial.enable():
-    ...     u.m.find_equivalent_units()  # doctest: +SKIP
+    ...     print(u.m.find_equivalent_units())
+          Primary name | Unit definition | Aliases
     ...
 
 To enable just specific units, use `~astropy.units.add_enabled_units`::
 
     >>> from astropy import units as u
     >>> from astropy.units import imperial
-    >>> with u.add_enabled_units_context([imperial.knot]):
-    ...     u.m.find_equivalent_units()  # doctest: +SKIP
+    >>> with u.add_enabled_units([imperial.knot]):
+    ...     print(u.m.find_equivalent_units())
+          Primary name | Unit definition | Aliases
     ...

@@ -8,6 +8,7 @@ from numpy.testing.utils import assert_allclose
 
 from ... import units as u
 from ...tests.helper import pytest, raises
+from ...extern.six.moves import zip
 
 
 class TestUfuncCoverage(object):
@@ -296,6 +297,15 @@ class TestQuantityMathFuncs(object):
                       == np.array([1., 8., 27.]) * u.m ** 3)
         # regression check on #1696
         assert np.all(np.power(np.arange(4.) * u.m, 0.) ==
+                      1. * u.dimensionless_unscaled)
+
+    # float_power only introduced in numpy 1.12
+    @pytest.mark.skipif("not hasattr(np, 'float_power')")
+    def test_float_power_array(self):
+        assert np.all(np.float_power(np.array([1., 2., 3.]) * u.m, 3.)
+                      == np.array([1., 8., 27.]) * u.m ** 3)
+        # regression check on #1696
+        assert np.all(np.float_power(np.arange(4.) * u.m, 0.) ==
                       1. * u.dimensionless_unscaled)
 
     @raises(ValueError)

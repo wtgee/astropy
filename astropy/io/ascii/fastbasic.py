@@ -7,7 +7,7 @@ from . import core
 from ...extern import six
 from ...table import Table
 from . import cparser
-from ...extern.six.moves import zip as izip
+from ...extern.six.moves import zip
 from ...utils import set_locale
 
 @six.add_metaclass(core.MetaBaseReader)
@@ -192,7 +192,7 @@ class FastNoHeader(FastBasic):
     """
     This class uses the fast C engine to read tables with no header line. If
     the names parameter is unspecified, the columns will be autonamed with
-    "col%d".
+    "col{}".
     """
     _format_name = 'fast_no_header'
     _description = 'Basic table with no headers using the fast C engine'
@@ -317,7 +317,7 @@ class FastRdb(FastBasic):
         try_float = {}
         try_string = {}
 
-        for name, col_type in izip(self.engine.get_names(), types):
+        for name, col_type in zip(self.engine.get_names(), types):
             if col_type[-1].lower() == 's':
                 try_int[name] = 0
                 try_float[name] = 0

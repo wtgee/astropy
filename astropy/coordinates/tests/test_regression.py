@@ -13,11 +13,13 @@ import numpy as np
 
 from ... import units as u
 from .. import (AltAz, EarthLocation, SkyCoord, get_sun, ICRS, CIRS, ITRS,
-                GeocentricTrueEcliptic, Longitude, Latitude, GCRS)
+                GeocentricTrueEcliptic, Longitude, Latitude, GCRS, HCRS,
+                get_moon, FK4, FK4NoETerms)
+from ..sites import get_builtin_sites
 from ...time import Time
 from ...utils import iers
 
-from ...tests.helper import pytest, assert_quantity_allclose
+from ...tests.helper import pytest, assert_quantity_allclose, catch_warnings, quantity_allclose
 from .test_matching import HAS_SCIPY, OLDER_SCIPY
 
 
@@ -180,7 +182,7 @@ def test_regression_4210():
         eclobj.distance
 
 
-def test_regression_futuretimes_4302(recwarn):
+def test_regression_futuretimes_4302():
     """
     Checks that an error is not raised for future times not covered by IERS
     tables (at least in a simple transform like CIRS->ITRS that simply requires
@@ -196,14 +198,14 @@ def test_regression_futuretimes_4302(recwarn):
     if hasattr(utils, '__warningregistry__'):
         utils.__warningregistry__.clear()
 
-    future_time = Time('2511-5-1')
-
-    c = CIRS(1*u.deg, 2*u.deg, obstime=future_time)
-    c.transform_to(ITRS(obstime=future_time))
+    with catch_warnings() as found_warnings:
+        future_time = Time('2511-5-1')
+        c = CIRS(1*u.deg, 2*u.deg, obstime=future_time)
+        c.transform_to(ITRS(obstime=future_time))
 
     if not isinstance(iers.IERS_Auto.iers_table, iers.IERS_Auto):
         saw_iers_warnings = False
-        for w in recwarn.list:
+        for w in found_warnings:
             if issubclass(w.category, AstropyWarning):
                 if '(some) times are outside of range covered by IERS table' in str(w.message):
                     saw_iers_warnings = True
@@ -225,3 +227,124 @@ def test_regression_4996():
 
     # this is intentionally not allclose - they should be *exactly* the same
     assert np.all(suncoo.ra.ravel() == suncoo2.ra.ravel())
+
+
+def test_regression_4293():
+    """Really just an extra test on FK4 no e, after finding that the units
+    were not always taken correctly.  This test is against explicitly doing
+    the transformations on pp170 of Explanatory Supplement to the Astronomical
+    Almanac (Seidelmann, 2005).
+
+    See https://github.com/astropy/astropy/pull/4293#issuecomment-234973086
+    """
+    # Check all over sky, but avoiding poles (note that FK4 did not ignore
+    # e terms within 10∘ of the poles...  see p170 of explan.supp.).
+    ra, dec = np.meshgrid(np.arange(0, 359, 45), np.arange(-80, 81, 40))
+    fk4 = FK4(ra.ravel() * u.deg, dec.ravel() * u.deg)
+
+    Dc = -0.065838*u.arcsec
+    Dd = +0.335299*u.arcsec
+    # Dc * tan(obliquity), as given on p.170
+    Dctano = -0.028553*u.arcsec
+
+    fk4noe_dec = (fk4.dec - (Dd*np.cos(fk4.ra) -
+                             Dc*np.sin(fk4.ra))*np.sin(fk4.dec) -
+                  Dctano*np.cos(fk4.dec))
+    fk4noe_ra = fk4.ra - (Dc*np.cos(fk4.ra) +
+                          Dd*np.sin(fk4.ra)) / np.cos(fk4.dec)
+
+    fk4noe = fk4.transform_to(FK4NoETerms)
+    # Tolerance here just set to how well the coordinates match, which is much
+    # better than the claimed accuracy of <1 mas for this first-order in
+    # v_earth/c approximation.
+    # Interestingly, if one divides by np.cos(fk4noe_dec) in the ra correction,
+    # the match becomes good to 2 μas.
+    assert_quantity_allclose(fk4noe.ra, fk4noe_ra, atol=11.*u.uas, rtol=0)
+    assert_quantity_allclose(fk4noe.dec, fk4noe_dec, atol=3.*u.uas, rtol=0)
+
+
+def test_regression_4926():
+    times = Time('2010-01-1') + np.arange(20)*u.day
+    green = get_builtin_sites()['greenwich']
+    # this is the regression test
+    moon = get_moon(times, green)
+
+    # this is an additional test to make sure the GCRS->ICRS transform works for complex shapes
+    moon.transform_to(ICRS())
+
+    # and some others to increase coverage of transforms
+    moon.transform_to(HCRS(obstime="J2000"))
+    moon.transform_to(HCRS(obstime=times))
+
+
+def test_regression_5209():
+    "check that distances are not lost on SkyCoord init"
+    time = Time('2015-01-01')
+    moon = get_moon(time)
+    new_coord = SkyCoord([moon])
+    assert_quantity_allclose(new_coord[0].distance, moon.distance)
+
+
+def test_regression_5133():
+    N = 1000
+    np.random.seed(12345)
+    lon = np.random.uniform(-10, 10, N) * u.deg
+    lat = np.random.uniform(50, 52, N) * u.deg
+    alt = np.random.uniform(0, 10., N) * u.km
+
+    time = Time('2010-1-1')
+
+    objects = EarthLocation.from_geodetic(lon, lat, height=alt)
+    itrs_coo = objects.get_itrs(time)
+
+    homes = [EarthLocation.from_geodetic(lon=-1 * u.deg, lat=52 * u.deg, height=h)
+             for h in (0, 1000, 10000)*u.km]
+
+    altaz_frames = [AltAz(obstime=time, location=h) for h in homes]
+    altaz_coos = [itrs_coo.transform_to(f) for f in altaz_frames]
+
+    # they should all be different
+    for coo in altaz_coos[1:]:
+        assert not quantity_allclose(coo.az, coo.az[0])
+        assert not quantity_allclose(coo.alt, coo.alt[0])
+
+
+def test_itrs_vals_5133():
+    time = Time('2010-1-1')
+    el = EarthLocation.from_geodetic(lon=20*u.deg, lat=45*u.deg, height=0*u.km)
+
+    lons = [20, 30, 20]*u.deg
+    lats = [44, 45, 45]*u.deg
+    alts = [0, 0, 10]*u.km
+    coos = [EarthLocation.from_geodetic(lon, lat, height=alt).get_itrs(time)
+            for lon, lat, alt in zip(lons, lats, alts)]
+
+    aaf = AltAz(obstime=time, location=el)
+    aacs = [coo.transform_to(aaf) for coo in coos]
+
+    assert all([coo.isscalar for coo in aacs])
+
+    # the ~1 arcsec tolerance is b/c aberration makes it not exact
+    assert_quantity_allclose(aacs[0].az, 180*u.deg, atol=1*u.arcsec)
+    assert aacs[0].alt < 0*u.deg
+    assert aacs[0].distance > 50*u.km
+
+    # it should *not* actually be 90 degrees, b/c constant latitude is not
+    # straight east anywhere except the equator... but should be close-ish
+    assert_quantity_allclose(aacs[1].az, 90*u.deg, atol=5*u.deg)
+    assert aacs[1].alt < 0*u.deg
+    assert aacs[1].distance > 50*u.km
+
+    assert_quantity_allclose(aacs[2].alt, 90*u.deg, atol=1*u.arcsec)
+    assert_quantity_allclose(aacs[2].distance, 10*u.km)
+
+
+def test_regression_simple_5133():
+    t = Time('J2010')
+    obj = EarthLocation(-1*u.deg, 52*u.deg, height=[100., 0.]*u.km)
+    home = EarthLocation(-1*u.deg, 52*u.deg, height=10.*u.km)
+    aa = obj.get_itrs(t).transform_to(AltAz(obstime=t, location=home))
+
+    # az is more-or-less undefined for straight up or down
+    assert_quantity_allclose(aa.alt, [90, -90]*u.deg, rtol=1e-5)
+    assert_quantity_allclose(aa.distance, [90, 10]*u.km)

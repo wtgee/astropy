@@ -7,11 +7,15 @@ import json
 
 import numpy as np
 from .. import units as u
+from ..units.quantity import QuantityInfo
 from ..extern import six
 from ..extern.six.moves import urllib
 from ..utils.exceptions import AstropyUserWarning
-from . import Longitude, Latitude
+from ..utils.compat.numpycompat import NUMPY_LT_1_12
+from ..utils.compat.numpy import broadcast_to
+from .angles import Longitude, Latitude
 from .builtin_frames import ITRS, GCRS
+from .representation import CartesianRepresentation
 from .errors import UnknownSiteException
 from ..utils import data
 
@@ -29,13 +33,13 @@ __all__ = ['EarthLocation']
 # Available ellipsoids (defined in erfam.h, with numbers exposed in erfa).
 ELLIPSOIDS = ('WGS84', 'GRS80', 'WGS72')
 
+OMEGA_EARTH = u.Quantity(7.292115855306589e-5, 1./u.s)
 """
 Rotational velocity of Earth. In UT1 seconds, this would be 2 pi / (24 * 3600),
 but we need the value in SI seconds.
 See Explanatory Supplement to the Astronomical Almanac, ed. P. Kenneth Seidelmann (1992),
 University Science Books.
 """
-V_EARTH = u.Quantity([0, 0, 7.292115855306589e-5])*u.rad/u.s
 
 
 def _check_ellipsoid(ellipsoid=None, default='WGS84'):
@@ -76,6 +80,24 @@ def _get_json_result(url, err_str):
 
     return results
 
+
+class EarthLocationInfo(QuantityInfo):
+    """
+    Container for meta information like name, description, format.  This is
+    required when the object is used as a mixin column within a table, but can
+    be used as a general way to store meta information.
+    """
+    _represent_as_dict_attrs = ('x', 'y', 'z', 'ellipsoid')
+
+    def _construct_from_dict(self, map):
+        # Need to pop ellipsoid off and update post-instantiation.  This is
+        # on the to-fix list in #4261.
+        ellipsoid = map.pop('ellipsoid')
+        out = self._parent_cls(**map)
+        out.ellipsoid = ellipsoid
+        return out
+
+
 class EarthLocation(u.Quantity):
     """
     Location on the Earth.
@@ -105,6 +127,8 @@ class EarthLocation(u.Quantity):
     _location_dtype = np.dtype({'names': ['x', 'y', 'z'],
                                 'formats': [np.float64]*3})
     _array_dtype = np.dtype((np.float64, (3,)))
+
+    info = EarthLocationInfo()
 
     def __new__(cls, *args, **kwargs):
         try:
@@ -215,7 +239,7 @@ class EarthLocation(u.Quantity):
         # get geocentric coordinates. Have to give one-dimensional array.
         xyz = erfa.gd2gc(getattr(erfa, ellipsoid), _lon.ravel(),
                                  _lat.ravel(), _height.ravel())
-        self = xyz.view(cls._location_dtype, cls).reshape(lon.shape)
+        self = xyz.view(cls._location_dtype, cls).reshape(_lon.shape)
         self._unit = u.meter
         self._ellipsoid = ellipsoid
         return self.to(height.unit)
@@ -498,6 +522,11 @@ class EarthLocation(u.Quantity):
         itrs : `~astropy.coordinates.ITRS`
             The new object in the ITRS frame
         """
+        # Broadcast for a single position at multiple times, but don't attempt
+        # to be more general here.
+        if obstime and self.size == 1 and obstime.size > 1:
+            self = broadcast_to(self, obstime.shape, subok=True)
+
         return ITRS(x=self.x, y=self.y, z=self.z, obstime=obstime)
 
     itrs = property(get_itrs, doc="""An `~astropy.coordinates.ITRS` object  with
@@ -516,19 +545,19 @@ class EarthLocation(u.Quantity):
 
         Returns
         --------
-        obsgeoloc : `~astropy.units.Quantity`
+        obsgeoloc : `~astropy.coordinates.CartesianRepresentation`
             The GCRS position of the object
-        obsgeovel : `~astropy.units.Quantity`
+        obsgeovel : `~astropy.coordinates.CartesianRepresentation`
             The GCRS velocity of the object
         """
         itrs = self.get_itrs(obstime)
         geocentric_frame = GCRS(obstime=obstime)
         # GCRS position
-        obsgeoloc = itrs.transform_to(geocentric_frame).cartesian.xyz.to(u.m)
-
-        vel_arr = np.cross(V_EARTH, np.rollaxis(obsgeoloc, 0, obsgeoloc.ndim))
-        vel_arr = np.rollaxis(vel_arr, -1, 0)
-        obsgeovel = u.Quantity(vel_arr, u.m/u.s, copy=False)
+        obsgeoloc = itrs.transform_to(geocentric_frame).cartesian
+        vel_x = -OMEGA_EARTH * obsgeoloc.y
+        vel_y = OMEGA_EARTH * obsgeoloc.x
+        vel_z = 0. * vel_x.unit
+        obsgeovel = CartesianRepresentation(vel_x, vel_y, vel_z)
         return obsgeoloc, obsgeovel
 
     @property
@@ -570,6 +599,14 @@ class EarthLocation(u.Quantity):
         return self._new_view(converted.view(self.dtype).reshape(self.shape),
                               unit)
     to.__doc__ = u.Quantity.to.__doc__
+
+    if NUMPY_LT_1_12:
+        def __repr__(self):
+            # Use the numpy >=1.12 way to format structured arrays.
+            from  .representation import _array2string
+            prefixstr = '<' + self.__class__.__name__ + ' '
+            arrstr = _array2string(self.view(np.ndarray), prefix=prefixstr)
+            return '{0}{1}{2:s}>'.format(prefixstr, arrstr, self._unitstr)
 
 
 # need to do this here at the bottom to avoid circular dependencies

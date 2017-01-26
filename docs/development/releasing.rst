@@ -273,6 +273,23 @@ The procedure for this is straightforward:
       $ git add CHANGES.rst
       $ git commit -m "Add <next_version> to changelog"
 
+#. Also update the "what's new" section of the docs to include a section for the
+   next major version.  E.g.::
+
+      $ cp docs/whatsnew/<current_version>.rst docs/whatsnew/<next_version>.rst
+
+   You'll then need to edit ``docs/whatsnew/<next_version>.rst``, removing all
+   the content but leaving the basic structure.  You may also need  to
+   replace the "by the numbers" numbers with "xxx" as a reminder to update them
+   before the next release. Then add the new version to the top of
+   ``docs/whatsnew/index.rst``, update the reference in ``docs/index.rst`` to
+   point to the that version, and commit these changes ::
+
+      $ git add docs/whatsnew/<next_version>.rst
+      $ git add docs/whatsnew/index.rst
+      $ git add docs/index.rst
+      $ git commit -m "Added <next_version> whats new section"
+
 #. Push all of these changes up to github::
 
       $ git push upstream v<version>.x:v<version>.x
@@ -285,6 +302,8 @@ The procedure for this is straightforward:
 
 #. On the github issue tracker, add a new milestone for the next major version.
 
+
+#. Repeat tbe above steps for the astropy-helpers, using the same version series.
 
 Maintaining Bug Fix Releases
 ----------------------------

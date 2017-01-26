@@ -16,6 +16,7 @@ from .. import exceptions
 from .. import tree
 
 from ..table import parse_single_table
+from ....extern.six.moves import range
 from ....tests.helper import raises, catch_warnings
 from ....utils.data import get_pkg_data_filename
 
@@ -163,7 +164,7 @@ def test_bit():
     x = c.parse("T")
 
 
-def test_bit_mask(recwarn):
+def test_bit_mask():
     config = {'pedantic': True}
     with catch_warnings(exceptions.W39) as w:
         field = tree.Field(

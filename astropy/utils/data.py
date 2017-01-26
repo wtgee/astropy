@@ -8,7 +8,7 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 from ..extern import six
-from ..extern.six.moves import urllib
+from ..extern.six.moves import urllib, range
 
 import atexit
 import contextlib
@@ -195,10 +195,10 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
             name_or_obj = download_file(
                 name_or_obj, cache=cache, show_progress=show_progress,
                 timeout=remote_timeout)
-        if six.PY3:
-            fileobj = io.FileIO(name_or_obj, 'r')
-        elif six.PY2:
+        if six.PY2:
             fileobj = open(name_or_obj, 'rb')
+        else:
+            fileobj = io.FileIO(name_or_obj, 'r')
         if is_url and not cache:
             delete_fds.append(fileobj)
         close_fds.append(fileobj)
@@ -297,10 +297,10 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
     # io.TextIOWrapper so read will return unicode based on the
     # encoding parameter.
 
-    if six.PY3:
-        needs_textio_wrapper = encoding != 'binary'
-    elif six.PY2:
+    if six.PY2:
         needs_textio_wrapper = encoding != 'binary' and encoding is not None
+    else:
+        needs_textio_wrapper = encoding != 'binary'
 
     if needs_textio_wrapper:
         # A bz2.BZ2File can not be wrapped by a TextIOWrapper,
@@ -317,10 +317,10 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
                 tmp.write(data)
                 tmp.close()
                 delete_fds.append(tmp)
-                if six.PY3:
-                    fileobj = io.FileIO(tmp.name, 'r')
-                elif six.PY2:
+                if six.PY2:
                     fileobj = open(tmp.name, 'rb')
+                else:
+                    fileobj = io.FileIO(tmp.name, 'r')
                 close_fds.append(fileobj)
 
         # On Python 2.x, we need to first wrap the regular `file`
@@ -923,8 +923,8 @@ def get_free_space_in_dir(path):
         retval = ctypes.windll.kernel32.GetDiskFreeSpaceExW(
                 ctypes.c_wchar_p(path), None, None, ctypes.pointer(free_bytes))
         if retval == 0:
-            raise IOError('Checking free space on %r failed unexpectedly.' %
-                          path)
+            raise IOError('Checking free space on {!r} failed '
+                          'unexpectedly.'.format(path))
         return free_bytes.value
     else:
         stat = os.statvfs(path)
@@ -1062,7 +1062,7 @@ def download_file(remote_url, cache=False, show_progress=True, timeout=None):
                             bytes_read += len(block)
                             p.update(bytes_read)
                             block = remote.read(conf.download_block_size)
-                    except:
+                    except BaseException:
                         if os.path.exists(f.name):
                             os.remove(f.name)
                         raise
@@ -1254,7 +1254,7 @@ def clear_download_cache(hashorurl=None):
                     hash_key = hashorurl
 
                 if os.path.exists(filepath):
-                    for k, v in list(six.iteritems(url2hash)):
+                    for k, v in six.iteritems(url2hash):
                         if v == filepath:
                             del url2hash[k]
                     os.unlink(filepath)

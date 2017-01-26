@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import numpy as np
 from .. import units as u
+from ..extern.six.moves import range
 
 __doctest_skip__ = ['wcs_to_celestial_frame']
 
@@ -254,7 +255,7 @@ def proj_plane_pixel_area(wcs):
 
 
 def is_proj_plane_distorted(wcs, maxerr=1.0e-5):
-    """
+    r"""
     For a WCS returns `False` if square image (detector) pixels stay square
     when projected onto the "plane of intermediate world coordinates"
     as defined in
@@ -277,8 +278,8 @@ def is_proj_plane_distorted(wcs, maxerr=1.0e-5):
     check:
 
     .. math::
-        \\left \| \\frac{C \cdot C^{\mathrm{T}}}\
-        {| det(C)|} - I \\right \|_{\mathrm{max}} < \epsilon .
+        \left \| \frac{C \cdot C^{\mathrm{T}}}
+        {| det(C)|} - I \right \|_{\mathrm{max}} < \epsilon .
 
     Parameters
     ----------

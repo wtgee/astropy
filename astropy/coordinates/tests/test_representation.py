@@ -10,7 +10,9 @@ import numpy as np
 from numpy.testing import assert_allclose
 
 from ... import units as u
-from ...tests.helper import pytest
+from ...tests.helper import (pytest, assert_quantity_allclose as
+                             assert_allclose_quantity)
+from ...utils import isiterable
 from ..angles import Longitude, Latitude, Angle
 from ..distances import Distance
 from ..representation import (REPRESENTATION_CLASSES,
@@ -28,10 +30,6 @@ def setup_function(func):
 def teardown_function(func):
     REPRESENTATION_CLASSES.clear()
     REPRESENTATION_CLASSES.update(func.REPRESENTATION_CLASSES_ORIG)
-
-
-def assert_allclose_quantity(q1, q2):
-    assert_allclose(q1.value, q2.to(q1.unit).value)
 
 
 class TestSphericalRepresentation(object):
@@ -176,7 +174,7 @@ class TestSphericalRepresentation(object):
         with pytest.raises(AttributeError):
             s1.distance = 1. * u.kpc
 
-    def test_getitem(self):
+    def test_getitem_len_iterable(self):
 
         s = SphericalRepresentation(lon=np.arange(10) * u.deg,
                                     lat=-np.arange(10) * u.deg,
@@ -188,7 +186,10 @@ class TestSphericalRepresentation(object):
         assert_allclose_quantity(s_slc.lat, [-2, -4, -6] * u.deg)
         assert_allclose_quantity(s_slc.distance, [1, 1, 1] * u.kpc)
 
-    def test_getitem_scalar(self):
+        assert len(s) == 10
+        assert isiterable(s)
+
+    def test_getitem_len_iterable_scalar(self):
 
         s = SphericalRepresentation(lon=1 * u.deg,
                                     lat=-2 * u.deg,
@@ -196,6 +197,9 @@ class TestSphericalRepresentation(object):
 
         with pytest.raises(TypeError):
             s_slc = s[0]
+        with pytest.raises(TypeError):
+            len(s)
+        assert not isiterable(s)
 
 
 class TestUnitSphericalRepresentation(object):
@@ -519,14 +523,44 @@ class TestCartesianRepresentation(object):
         assert_allclose(s1.y.value, 2)
         assert_allclose(s1.z.value, 3)
 
+        r = np.arange(27.).reshape(3, 3, 3) * u.kpc
+        s2 = CartesianRepresentation(r, xyz_axis=0)
+        assert s2.shape == (3, 3)
+        assert s2.x.unit == u.kpc
+        assert np.all(s2.x == r[0])
+        assert np.all(s2.xyz == r)
+        assert np.all(s2.get_xyz(xyz_axis=0) == r)
+        s3 = CartesianRepresentation(r, xyz_axis=1)
+        assert s3.shape == (3, 3)
+        assert np.all(s3.x == r[:, 0])
+        assert np.all(s3.y == r[:, 1])
+        assert np.all(s3.z == r[:, 2])
+        assert np.all(s3.get_xyz(xyz_axis=1) == r)
+        s4 = CartesianRepresentation(r, xyz_axis=2)
+        assert s4.shape == (3, 3)
+        assert np.all(s4.x == r[:, :, 0])
+        assert np.all(s4.get_xyz(xyz_axis=2) == r)
+        s5 = CartesianRepresentation(r, unit=u.pc)
+        assert s5.x.unit == u.pc
+        assert np.all(s5.xyz == r)
+        s6 = CartesianRepresentation(r.value, unit=u.pc, xyz_axis=2)
+        assert s6.x.unit == u.pc
+        assert np.all(s6.get_xyz(xyz_axis=2).value == r.value)
+
     def test_init_one_array_size_fail(self):
         with pytest.raises(ValueError) as exc:
-            s1 = CartesianRepresentation(x=[1, 2, 3, 4] * u.pc)
+            CartesianRepresentation(x=[1, 2, 3, 4] * u.pc)
         assert exc.value.args[0].startswith("too many values to unpack")
+
+    def test_init_xyz_but_more_than_one_array_fail(self):
+        with pytest.raises(ValueError) as exc:
+            CartesianRepresentation(x=[1, 2, 3] * u.pc, y=[2, 3, 4] * u.pc,
+                                    z=[3, 4, 5] * u.pc, xyz_axis=0)
+        assert 'xyz_axis should only be set' in str(exc)
 
     def test_init_one_array_yz_fail(self):
         with pytest.raises(ValueError) as exc:
-            s1 = CartesianRepresentation(x=[1, 2, 3, 4] * u.pc, y=[1, 2] * u.pc)
+            CartesianRepresentation(x=[1, 2, 3, 4] * u.pc, y=[1, 2] * u.pc)
         assert exc.value.args[0] == ("x, y, and z are required to instantiate "
                                      "CartesianRepresentation")
 
@@ -584,7 +618,7 @@ class TestCartesianRepresentation(object):
             s1 = CartesianRepresentation(x=[1 * u.kpc, 2 * u.Mpc],
                                          y=[3 * u.kpc, 4 * u.pc],
                                          z=[5. * u.cm, 6 * u.m])
-        assert exc.value.args[0] == "x should be a Quantity"
+        assert exc.value.args[0].startswith("x should")
 
     def test_readonly(self):
 
@@ -931,26 +965,26 @@ def test_no_unnecessary_copies():
 def test_representation_repr():
     r1 = SphericalRepresentation(lon=1 * u.deg, lat=2.5 * u.deg, distance=1 * u.kpc)
     assert repr(r1) == ('<SphericalRepresentation (lon, lat, distance) in (deg, deg, kpc)\n'
-                        '    (1.0, 2.5, 1.0)>')
+                        '    ( 1.,  2.5,  1.)>')
 
     r2 = CartesianRepresentation(x=1 * u.kpc, y=2 * u.kpc, z=3 * u.kpc)
     assert repr(r2) == ('<CartesianRepresentation (x, y, z) in kpc\n'
-                        '    (1.0, 2.0, 3.0)>')
+                        '    ( 1.,  2.,  3.)>')
 
     r3 = CartesianRepresentation(x=[1, 2, 3] * u.kpc, y=4 * u.kpc, z=[9, 10, 11] * u.kpc)
     assert repr(r3) == ('<CartesianRepresentation (x, y, z) in kpc\n'
-                        '    [(1.0, 4.0, 9.0), (2.0, 4.0, 10.0), (3.0, 4.0, 11.0)]>')
+                        '    [( 1.,  4.,   9.), ( 2.,  4.,  10.), ( 3.,  4.,  11.)]>')
 
 
 def test_representation_str():
     r1 = SphericalRepresentation(lon=1 * u.deg, lat=2.5 * u.deg, distance=1 * u.kpc)
-    assert str(r1) == '(1.0, 2.5, 1.0) (deg, deg, kpc)'
+    assert str(r1) == '( 1.,  2.5,  1.) (deg, deg, kpc)'
 
     r2 = CartesianRepresentation(x=1 * u.kpc, y=2 * u.kpc, z=3 * u.kpc)
-    assert str(r2) == '(1.0, 2.0, 3.0) kpc'
+    assert str(r2) == '( 1.,  2.,  3.) kpc'
 
     r3 = CartesianRepresentation(x=[1, 2, 3] * u.kpc, y=4 * u.kpc, z=[9, 10, 11] * u.kpc)
-    assert str(r3) == '[(1.0, 4.0, 9.0) (2.0, 4.0, 10.0) (3.0, 4.0, 11.0)] kpc'
+    assert str(r3) == '[( 1.,  4.,   9.), ( 2.,  4.,  10.), ( 3.,  4.,  11.)] kpc'
 
 
 def test_subclass_representation():

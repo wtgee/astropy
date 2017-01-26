@@ -21,9 +21,13 @@
 # done. If the sys.path entry above is added, when the astropy.sphinx.conf
 # import occurs, it will import the *source* version of astropy instead of the
 # version installed (if invoked as "make html" or directly with sphinx), or the
-# version in the build directory (if "python setup.py build_sphinx" is used).
+# version in the build directory (if "python setup.py build_docs" is used).
 # Thus, any C-extensions that are needed to build the documentation will *not*
 # be accessible, and the documentation will not build correctly.
+
+import os
+ON_RTD = os.environ.get('READTHEDOCS') == 'True'
+ON_TRAVIS = os.environ.get('TRAVIS') == 'true'
 
 try:
     import astropy_helpers
@@ -49,7 +53,8 @@ import astropy
 from astropy import visualization
 plot_rcparams = visualization.astropy_mpl_docs_style
 plot_apply_rcparams = True
-
+plot_html_show_source_link = False
+plot_formats = ['png', 'svg', 'pdf']
 
 # -- General configuration ----------------------------------------------------
 
@@ -229,21 +234,9 @@ try:
             'astropy': None,
             'matplotlib': 'http://matplotlib.org/',
             'numpy': 'http://docs.scipy.org/doc/numpy/',
-        }
+        },
+        'abort_on_example_error': True
     }
-
-    # TODO: remove the code below once a better solution is implemented in
-    # sphinx-gallery.
-    # We want to make sure that gallery examples fail the build if there are
-    # any errors, when building the docs with the option to fail if there are
-    # any warnings. However, at the moment, we can only either fail the build
-    # completely or not fail it at all, until this is fixed properly in
-    # sphinx-gallery: https://github.com/sphinx-gallery/sphinx-gallery/pull/97
-    # Therefore, for now we simply check if we are on Travis, and if so, we
-    # enabled the abort_on_example_error.
-    if os.environ.get('TRAVIS', 'false') == 'true':
-        def setup(app):
-            app.config.values['abort_on_example_error'] = (True, 'html', ())
 
 except ImportError:
     def setup(app):

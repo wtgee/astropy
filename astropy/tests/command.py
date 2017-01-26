@@ -29,6 +29,34 @@ def _fix_user_options(options):
     return [tuple(to_str_or_none(x) for x in y) for y in options]
 
 
+class FixRemoteDataOption(type):
+    """
+    This metaclass is used to catch cases where the user is running the tests
+    with --remote-data. We've now changed the --remote-data option so that it
+    takes arguments, but we still want --remote-data to work as before and to
+    enable all remote tests. With this metaclass, we can modify sys.argv
+    before distutils/setuptools try to parse the command-line options.
+    """
+    def __init__(cls, name, bases, dct):
+
+        try:
+            idx = sys.argv.index('--remote-data')
+        except ValueError:
+            pass
+        else:
+            sys.argv[idx] = '--remote-data=any'
+
+        try:
+            idx = sys.argv.index('-R')
+        except ValueError:
+            pass
+        else:
+            sys.argv[idx] = '-R=any'
+
+        return super(FixRemoteDataOption, cls).__init__(name, bases, dct)
+
+
+@six.add_metaclass(FixRemoteDataOption)
 class AstropyTest(Command, object):
     description = 'Run the tests for this package'
 
@@ -50,7 +78,8 @@ class AstropyTest(Command, object):
          "Enable pytest pastebin output. Either 'all' or 'failed'."),
         ('args=', 'a',
          'Additional arguments to be passed to pytest.'),
-        ('remote-data', 'R', 'Run tests that download remote data.'),
+        ('remote-data=', 'R', 'Run tests that download remote data. Should be '
+         'one of none/astropy/any (defaults to none).'),
         ('pep8', '8',
          'Enable PEP8 checking and disable regular tests. '
          'Requires the pytest-pep8 plugin.'),
@@ -90,7 +119,7 @@ class AstropyTest(Command, object):
         self.plugins = None
         self.pastebin = None
         self.args = None
-        self.remote_data = False
+        self.remote_data = 'none'
         self.pep8 = False
         self.pdb = False
         self.coverage = False
@@ -119,10 +148,10 @@ class AstropyTest(Command, object):
             cmd_pre += pre
             cmd_post += post
 
-        if six.PY3:
-            set_flag = "import builtins; builtins._ASTROPY_TEST_ = True"
-        else:
+        if six.PY2:
             set_flag = "import __builtin__; __builtin__._ASTROPY_TEST_ = True"
+        else:
+            set_flag = "import builtins; builtins._ASTROPY_TEST_ = True"
 
         cmd = ('{cmd_pre}{0}; import {1.package_name}, sys; result = ('
                '{1.package_name}.test('
@@ -148,10 +177,16 @@ class AstropyTest(Command, object):
         """
         Run the tests!
         """
+        # Install the runtime and test dependencies.
+        if self.distribution.install_requires:
+            self.distribution.fetch_build_eggs(
+                self.distribution.install_requires)
+        if self.distribution.tests_require:
+            self.distribution.fetch_build_eggs(self.distribution.tests_require)
 
         # Ensure there is a doc path
         if self.docs_path is None:
-            cfg_docs_dir = self.distribution.get_option_dict('build_sphinx').get('source_dir', None)
+            cfg_docs_dir = self.distribution.get_option_dict('build_docs').get('source_dir', None)
 
             # Some affiliated packages use this.
             # See astropy/package-template#157
@@ -255,7 +290,7 @@ class AstropyTest(Command, object):
         # as being specifically for Python 2 or Python 3
         with open(coveragerc, 'r') as fd:
             coveragerc_content = fd.read()
-        if six.PY3:
+        if not six.PY2:
             ignore_python_version = '2'
         else:
             ignore_python_version = '3'

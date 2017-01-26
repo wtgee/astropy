@@ -4,6 +4,7 @@ from __future__ import division  # confidence high
 
 import contextlib
 import csv
+import operator
 import os
 import re
 import sys
@@ -29,10 +30,11 @@ from ..util import _is_int, _str_to_num
 
 from ....extern import six
 from ....extern.six import string_types
-from ....extern.six.moves import xrange as range
-from ....utils import deprecated, lazyproperty
+from ....extern.six.moves import range, zip
+from ....utils import lazyproperty
 from ....utils.compat import suppress
 from ....utils.exceptions import AstropyUserWarning
+from ....utils.decorators import deprecated_renamed_argument
 
 
 class FITSTableDumpDialect(csv.excel):
@@ -81,9 +83,7 @@ class _TableLikeHDU(_ValidHDU):
         the class this method was called on using the column definition from
         the input.
 
-        This is an alternative to the now deprecated `new_table` function,
-        and otherwise accepts the same arguments.  See also
-        `FITS_rec.from_columns`.
+        See also `FITS_rec.from_columns`.
 
         Parameters
         ----------
@@ -573,8 +573,8 @@ class _TableBaseHDU(ExtensionHDU, _TableLikeHDU):
             ncols = self._header['TFIELDS']
             format = ', '.join([self._header['TFORM' + str(j + 1)]
                                 for j in range(ncols)])
-            format = '[%s]' % format
-        dims = "%dR x %dC" % (nrows, ncols)
+            format = '[{}]'.format(format)
+        dims = "{}R x {}C".format(nrows, ncols)
         ncards = len(self._header)
 
         return (self.name, class_name, ncards, dims, format)
@@ -617,7 +617,7 @@ class _TableBaseHDU(ExtensionHDU, _TableLikeHDU):
             else:
                 for after_keyword in KEYWORD_NAMES[keyword_idx + 1:]:
                     after_keyword += str(col_idx + 1)
-                    if after_keyword in header:
+                    if after_keyword in self._header:
                         self._header.insert(after_keyword,
                                             (keyword, new_value))
                         break
@@ -644,7 +644,7 @@ class _TableBaseHDU(ExtensionHDU, _TableLikeHDU):
             match = TDEF_RE.match(keyword)
             try:
                 base_keyword = match.group('label')
-            except:
+            except Exception:
                 continue                # skip if there is no match
 
             if base_keyword in KEYWORD_TO_ATTRIBUTE:
@@ -653,15 +653,16 @@ class _TableBaseHDU(ExtensionHDU, _TableLikeHDU):
                                        num))
 
         # First delete
-        for idx, keyword, _, num in sorted(table_keywords,
-                                           key=lambda k: k[0], reverse=True):
+        rev_sorted_idx_0 = sorted(table_keywords, key=operator.itemgetter(0),
+                                  reverse=True)
+        for idx, keyword, _, num in rev_sorted_idx_0:
             if index is None or index == num:
                 del self._header[idx]
 
         # Now shift up remaining column keywords if only one column was cleared
         if index is not None:
-            for _, keyword, base_keyword, num in sorted(table_keywords,
-                                                        key=lambda k: k[3]):
+            sorted_idx_3 = sorted(table_keywords, key=operator.itemgetter(3))
+            for _, keyword, base_keyword, num in sorted_idx_3:
                 if num <= index:
                     continue
 
@@ -720,7 +721,7 @@ class TableHDU(_TableBaseHDU):
         dup = np.rec.find_duplicate(names)
 
         if dup:
-            raise ValueError("Duplicate field names: %s" % dup)
+            raise ValueError("Duplicate field names: {}".format(dup))
 
         # TODO: Determine if this extra logic is necessary--I feel like the
         # _AsciiColDefs class should be responsible for telling the table what
@@ -967,7 +968,8 @@ class BinTableHDU(_TableBaseHDU):
           image.
       """)
 
-    def dump(self, datafile=None, cdfile=None, hfile=None, clobber=False):
+    @deprecated_renamed_argument('clobber', 'overwrite', '1.3')
+    def dump(self, datafile=None, cdfile=None, hfile=None, overwrite=False):
         """
         Dump the table HDU to a file in ASCII format.  The table may be dumped
         in three separate files, one containing column definitions, one
@@ -988,8 +990,13 @@ class BinTableHDU(_TableBaseHDU):
             Output header parameters file.  The default is `None`,
             no header parameters output is produced.
 
-        clobber : bool
-            Overwrite the output files if they exist.
+        overwrite : bool, optional
+            If ``True``, overwrite the output file if it exists. Raises an
+            ``OSError`` (``IOError`` for Python 2) if ``False`` and the
+            output file exists. Default is ``False``.
+
+            .. versionchanged:: 1.3
+               ``overwrite`` replaces the deprecated ``clobber`` argument.
 
         Notes
         -----
@@ -1006,15 +1013,16 @@ class BinTableHDU(_TableBaseHDU):
         for f in files:
             if isinstance(f, string_types):
                 if os.path.exists(f) and os.path.getsize(f) != 0:
-                    if clobber:
-                        warnings.warn("Overwriting existing file '%s'." % f,
-                                      AstropyUserWarning)
+                    if overwrite:
+                        warnings.warn(
+                            "Overwriting existing file '{}'.".format(f),
+                            AstropyUserWarning)
                         os.remove(f)
                     else:
                         exist.append(f)
 
         if exist:
-            raise IOError('  '.join(["File '%s' already exists." % f
+            raise IOError('  '.join(["File '{}' already exists.".format(f)
                                      for f in exist]))
 
         # Process the data
@@ -1030,10 +1038,6 @@ class BinTableHDU(_TableBaseHDU):
 
     if isinstance(dump.__doc__, string_types):
         dump.__doc__ += _tdump_file_format.replace('\n', '\n        ')
-
-    @deprecated('0.1', alternative=':meth:`dump`')
-    def tdump(self, datafile=None, cdfile=None, hfile=None, clobber=False):
-        self.dump(datafile, cdfile, hfile, clobber)
 
     def load(cls, datafile, cdfile=None, hfile=None, replace=False,
              header=None):
@@ -1120,12 +1124,6 @@ class BinTableHDU(_TableBaseHDU):
     # Have to create a classmethod from this here instead of as a decorator;
     # otherwise we can't update __doc__
 
-    @deprecated('0.1', alternative=':meth:`load`')
-    @classmethod
-    def tcreate(cls, datafile, cdfile=None, hfile=None, replace=False,
-                header=None):
-        return cls.load(datafile, cdfile, hfile, replace, header)
-
     def _dump_data(self, fileobj):
         """
         Write the table data in the ASCII format read by BinTableHDU.load()
@@ -1148,15 +1146,19 @@ class BinTableHDU(_TableBaseHDU):
         def format_value(val, format):
             if format[0] == 'S':
                 itemsize = int(format[1:])
-                return '%-*s' % (itemsize, val)
+                return '{:{size}}'.format(val, size=itemsize)
             elif format in np.typecodes['AllInteger']:
                 # output integer
-                return '%21d' % val
+                return '{:21d}'.format(val)
             elif format in np.typecodes['Complex']:
-                return '%21.15g+%.15gj' % (val.real, val.imag)
+                return '{:21.15g}+{:.15g}j'.format(val.real, val.imag)
             elif format in np.typecodes['Float']:
                 # output floating point
-                return '%#21.15g' % val
+                # workaround as py2 doesn't support alternate form for format()
+                if six.PY2:
+                    return '%#21.15g' % val
+                else:
+                    return '{:#21.15g}'.format(val)
 
         for row in self.data:
             line = []   # the line for this row of the table
@@ -1173,7 +1175,7 @@ class BinTableHDU(_TableBaseHDU):
                     # the length of the array for this row and set the format
                     # for the VLA data
                     line.append('VLA_Length=')
-                    line.append('%-21d' % len(row[column.name]))
+                    line.append('{:21d}'.format(len(row[column.name])))
                     _, dtype, option = _parse_tformat(column.format)
                     vla_format = FITS2NUMPY[option[0]][0]
 
@@ -1217,7 +1219,7 @@ class BinTableHDU(_TableBaseHDU):
         for column in self.columns:
             line = [column.name, column.format]
             attrs = ['disp', 'unit', 'dim', 'null', 'bscale', 'bzero']
-            line += ['%-16s' % (value if value else '""')
+            line += ['{:16s}'.format(value if value else '""')
                      for value in (getattr(column, attr) for attr in attrs)]
             fileobj.write(' '.join(line))
             fileobj.write('\n')
@@ -1297,8 +1299,7 @@ class BinTableHDU(_TableBaseHDU):
 
         # TODO: In the future maybe enable loading a bit at a time so that we
         # can convert from this format to an actual FITS file on disk without
-        # needing enough physical memory to hold the entire thing at once;
-        # new_table() could use a similar feature.
+        # needing enough physical memory to hold the entire thing at once
         hdu = BinTableHDU.from_columns(np.recarray(shape=1, dtype=dtype),
                                        nrows=nrows, fill=True)
 
@@ -1400,67 +1401,6 @@ class BinTableHDU(_TableBaseHDU):
             fileobj.close()
 
         return ColDefs(columns)
-
-
-@deprecated('0.4',
-            alternative=':meth:`BinTableHDU.from_columns` for new BINARY '
-                        'tables or :meth:`TableHDU.from_columns` for new '
-                        'ASCII tables')
-def new_table(input, header=None, nrows=0, fill=False, tbtype=BinTableHDU):
-    """
-    Create a new table from the input column definitions.
-
-    Warning: Creating a new table using this method creates an in-memory *copy*
-    of all the column arrays in the input.  This is because if they are
-    separate arrays they must be combined into a single contiguous array.
-
-    If the column data is already in a single contiguous array (such as an
-    existing record array) it may be better to create a `BinTableHDU` instance
-    directly.  See the Astropy documentation for more details.
-
-    Parameters
-    ----------
-    input : sequence of `Column` or a `ColDefs`
-        The data to create a table from
-
-    header : `Header` instance
-        Header to be used to populate the non-required keywords
-
-    nrows : int
-        Number of rows in the new table
-
-    fill : bool
-        If `True`, will fill all cells with zeros or blanks.  If
-        `False`, copy the data from input, undefined cells will still
-        be filled with zeros/blanks.
-
-    tbtype : str or type
-        Table type to be created (`BinTableHDU` or `TableHDU`) or the class
-        name as a string.  Currently only `BinTableHDU` and `TableHDU` (ASCII
-        tables) are supported.
-    """
-
-    # tbtype defaults to classes now, but in all prior version of PyFITS it was
-    # a string, so we still support that use case as well
-    if not isinstance(tbtype, string_types):
-        cls = tbtype
-        tbtype = cls.__name__
-    else:
-        # Right now the string input must be one of 'TableHDU' or 'BinTableHDU'
-        # and nothing else, though we will allow this to be case insensitive
-        # This could be done more generically through the HDU registry, but my
-        # hope is to deprecate this function anyways so there's not much point
-        # in trying to make it more "generic".
-        if tbtype.lower() == 'tablehdu':
-            cls = TableHDU
-        elif tbtype.lower() == 'bintablehdu':
-            cls = BinTableHDU
-        else:
-            raise ValueError("tbtype must be one of 'TableHDU' or "
-                             "'BinTableHDU'")
-
-    # construct a table HDU of the requested type
-    return cls.from_columns(input, header=header, nrows=nrows, fill=fill)
 
 
 @contextlib.contextmanager

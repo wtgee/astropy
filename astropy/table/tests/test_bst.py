@@ -1,6 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 from ..bst import BST
-import pytest
+from ...extern.six.moves import range
+from ...tests.helper import pytest
 
 def get_tree(TreeType):
     b = TreeType([], [])
@@ -11,7 +12,7 @@ def get_tree(TreeType):
 @pytest.fixture
 def tree():
     return get_tree(BST)
-    '''
+    r'''
          5
        /   \
       2     9

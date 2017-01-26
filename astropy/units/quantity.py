@@ -10,6 +10,7 @@ from __future__ import (absolute_import, unicode_literals, division,
                         print_function)
 
 # Standard library
+import re
 import numbers
 from fractions import Fraction
 import warnings
@@ -18,6 +19,7 @@ import numpy as np
 
 # AstroPy
 from ..extern import six
+from ..extern.six.moves import zip
 from .core import (Unit, dimensionless_unscaled, get_current_unit_registry,
                    UnitBase, UnitsError, UnitConversionError, UnitTypeError)
 from .format.latex import Latex
@@ -128,23 +130,45 @@ class QuantityInfo(ParentDtypeInfo):
     """
     attrs_from_parent = set(['dtype', 'unit'])  # dtype and unit taken from parent
     _supports_indexing = True
+    _represent_as_dict_attrs = ('value', 'unit')
 
     @staticmethod
     def default_format(val):
         return '{0.value:}'.format(val)
 
+    @staticmethod
+    def possible_string_format_functions(format_):
+        """Iterate through possible string-derived format functions.
+
+        A string can either be a format specifier for the format built-in,
+        a new-style format string, or an old-style format string.
+
+        This method is overridden in order to suppress printing the unit
+        in each row since it is already at the top in the column header.
+        """
+        yield lambda format_, val: format(val.value, format_)
+        yield lambda format_, val: format_.format(val.value)
+        yield lambda format_, val: format_ % val.value
+
+    def _construct_from_dict(self, map):
+        # Need to pop value because different Quantity subclasses use
+        # different first arg name for the value.  :-(
+        value = map.pop('value')
+        return self._parent_cls(value, **map)
+
 
 @six.add_metaclass(InheritDocstrings)
 class Quantity(np.ndarray):
-    """ A `~astropy.units.Quantity` represents a number with some associated unit.
+    """A `~astropy.units.Quantity` represents a number with some associated unit.
 
     Parameters
     ----------
-    value : number, `~numpy.ndarray`, `Quantity` object, or sequence of `Quantity` objects.
+    value : number, `~numpy.ndarray`, `Quantity` object (sequence), str
         The numerical value of this quantity in the units given by unit.  If a
         `Quantity` or sequence of them (or any other valid object with a
         ``unit`` attribute), creates a new `Quantity` object, converting to
-        `unit` units as needed.
+        `unit` units as needed.  If a string, it is converted to a number or
+        `Quantity`, depending on whether a unit is present.
 
     unit : `~astropy.units.UnitBase` instance, str
         An object that represents the unit associated with the input value.
@@ -186,6 +210,12 @@ class Quantity(np.ndarray):
     TypeError
         If the unit provided is not either a :class:`~astropy.units.Unit`
         object or a parseable string unit.
+
+    Notes
+    -----
+    Quantities can also be created by multiplying a number or array with a
+    :class:`~astropy.units.Unit`. See http://docs.astropy.org/en/latest/units/
+
     """
     # Need to set a class-level default for _equivalencies, or
     # Constants can not initialize properly
@@ -228,17 +258,38 @@ class Quantity(np.ndarray):
             return np.array(value, dtype=dtype, copy=copy, order=order,
                             subok=True, ndmin=ndmin)
 
-        # Maybe list/tuple of Quantity? short-circuit array for speed
-        if (not isinstance(value, np.ndarray) and isiterable(value) and
-            all(isinstance(v, Quantity) for v in value)):
-            # Convert all quantities to the same unit.
-            if unit is None:
-                unit = value[0].unit
-            value = [q.to(unit).value for q in value]
-            value_unit = unit  # signal below that conversion has been done
-            copy = False  # copy already made
+        # Maybe str, or list/tuple of Quantity? If so, this may set value_unit.
+        # To ensure array remains fast, we short-circuit it.
+        value_unit = None
+        if not isinstance(value, np.ndarray):
+            if isinstance(value, six.string_types):
+                # The first part of the regex string matches any integer/float;
+                # the second parts adds possible trailing .+-, which will break
+                # the float function below and ensure things like 1.2.3deg
+                # will not work.
+                v = re.match(r'\s*[+-]?((\d+\.?\d*)|(\.\d+))([eE][+-]?\d+)?'
+                             r'[.+-]?', value)
+                try:
+                    value = float(v.group())
+                except Exception:
+                    raise TypeError('Cannot parse "{0}" as a {1}. It does not '
+                                    'start with a number.'
+                                    .format(value, cls.__name__))
+                unit_string = v.string[v.end():].strip()
+                if unit_string:
+                    value_unit = Unit(unit_string)
+                    if unit is None:
+                        unit = value_unit  # signal no conversion needed below.
 
-        else:
+            elif (isiterable(value) and len(value) > 0 and
+                  all(isinstance(v, Quantity) for v in value)):
+                # Convert all quantities to the same unit.
+                if unit is None:
+                    unit = value[0].unit
+                value = [q.to(unit).value for q in value]
+                value_unit = unit  # signal below that conversion has been done
+
+        if value_unit is None:
             # If the value has a `unit` attribute and if not None
             # (for Columns with uninitialized unit), treat it like a quantity.
             value_unit = getattr(value, 'unit', None)
@@ -364,29 +415,31 @@ class Quantity(np.ndarray):
                                         args[0].__class__.__name__,
                                         args[1].__class__.__name__))
 
-        # In the case of np.power, the unit itself needs to be modified by an
-        # amount that depends on one of the input values, so we need to treat
-        # this as a special case.
-        # TODO: find a better way to deal with this case
-        if function is np.power and result_unit != dimensionless_unscaled:
-
-            if units[1] is None:
-                p = args[1]
+        # In the case of np.power and np.float_power, the unit itself needs to
+        # be modified by an amount that depends on one of the input values,
+        # so we need to treat this as a special case.
+        # TODO: find a better way to deal with this.
+        if result_unit is False:
+            if units[0] is None or units[0] == dimensionless_unscaled:
+                result_unit = dimensionless_unscaled
             else:
-                p = args[1].to(dimensionless_unscaled).value
-
-            try:
-                result_unit = result_unit ** p
-            except ValueError as exc:
-                # Changing the unit does not work for, e.g., array-shaped
-                # power, but this is OK if we're (scaled) dimensionless.
-                try:
-                    converters[0] = units[0]._get_converter(
-                        dimensionless_unscaled)
-                except UnitConversionError:
-                    raise exc
+                if units[1] is None:
+                    p = args[1]
                 else:
-                    result_unit = dimensionless_unscaled
+                    p = args[1].to(dimensionless_unscaled).value
+
+                try:
+                    result_unit = units[0] ** p
+                except ValueError as exc:
+                    # Changing the unit does not work for, e.g., array-shaped
+                    # power, but this is OK if we're (scaled) dimensionless.
+                    try:
+                        converters[0] = units[0]._get_converter(
+                            dimensionless_unscaled)
+                    except UnitConversionError:
+                        raise exc
+                    else:
+                        result_unit = dimensionless_unscaled
 
         # We now prepare the output object
         if self is obj:
@@ -657,7 +710,7 @@ class Quantity(np.ndarray):
         multiplication and division by another unit, as well as in
         ``__array_finalize__`` for wrapping up views.  For Quantity, it just
         sets the unit, but subclasses can override it to check that, e.g.,
-        a unit is consistent.  It should return ``self`` after modification.
+        a unit is consistent.
         """
         if not isinstance(unit, UnitBase):
             # Trying to go through a string ensures that, e.g., Magnitudes with
@@ -1002,7 +1055,7 @@ class Quantity(np.ndarray):
         potential for ambiguity otherwise.
         """
         return True
-    if six.PY3:
+    if not six.PY2:
         __bool__ = __nonzero__
 
     def __len__(self):
@@ -1033,7 +1086,7 @@ class Quantity(np.ndarray):
         try:
             assert self.unit.is_unity()
             return self.value.__index__()
-        except:
+        except Exception:
             raise TypeError('Only integer dimensionless scalar quantities '
                             'can be converted to a Python index')
 
@@ -1510,6 +1563,9 @@ class SpecificTypeQuantity(Quantity):
 
     # Default unit for initialization through the constructor.
     _default_unit = None
+
+    # ensure that we get precedence over our superclass.
+    __array_priority__ = Quantity.__array_priority__ + 10
 
     def __quantity_subclass__(self, unit):
         if unit.is_equivalent(self._equivalent_unit):

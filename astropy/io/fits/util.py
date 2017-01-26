@@ -6,6 +6,7 @@ import gzip
 import itertools
 import io
 import mmap
+import operator
 import os
 import platform
 import signal
@@ -16,6 +17,8 @@ import textwrap
 import threading
 import warnings
 import weakref
+from contextlib import contextmanager
+from ...utils import data
 
 from distutils.version import LooseVersion
 
@@ -32,15 +35,17 @@ except ImportError:
 from ...extern import six
 from ...extern.six import (string_types, integer_types, text_type,
                            binary_type, next)
-from ...extern.six.moves import zip
+from ...extern.six.moves import zip, range
 from ...utils import wraps
 from ...utils.compat import suppress
 from ...utils.exceptions import AstropyUserWarning
 
-if six.PY3:
-    cmp = lambda a, b: (a > b) - (a < b)
-elif six.PY2:
+if six.PY2:
     cmp = cmp
+else:
+    cmp = lambda a, b: (a > b) - (a < b)
+
+all_integer_types = integer_types + (np.integer,)
 
 
 class NotifierMixin(object):
@@ -201,14 +206,14 @@ def itersubclasses(cls, _seen=None):
 
     if not isinstance(cls, type):
         raise TypeError('itersubclasses must be called with '
-                        'new-style classes, not %.100r' % cls)
+                        'new-style classes, not {:.100r}'.format(cls))
     if _seen is None:
         _seen = set()
     try:
         subs = cls.__subclasses__()
     except TypeError:  # fails only when cls is type
         subs = cls.__subclasses__(cls)
-    for sub in sorted(subs, key=lambda s: s.__name__):
+    for sub in sorted(subs, key=operator.attrgetter('__name__')):
         if sub not in _seen:
             _seen.add(sub)
             yield sub
@@ -235,8 +240,9 @@ def ignore_sigint(func):
                 self.sigint_received = False
 
             def __call__(self, signum, frame):
-                warnings.warn('KeyboardInterrupt ignored until %s is '
-                              'complete!' % func.__name__, AstropyUserWarning)
+                warnings.warn('KeyboardInterrupt ignored until {} is '
+                              'complete!'.format(func.__name__),
+                              AstropyUserWarning)
                 self.sigint_received = True
 
         sigint_handler = SigintHandler()
@@ -301,7 +307,7 @@ def isreadable(f):
     sense approximation of io.IOBase.readable.
     """
 
-    if six.PY3 and hasattr(f, 'readable'):
+    if not six.PY2 and hasattr(f, 'readable'):
         return f.readable()
 
     if hasattr(f, 'closed') and f.closed:
@@ -325,7 +331,7 @@ def iswritable(f):
     sense approximation of io.IOBase.writable.
     """
 
-    if six.PY3 and hasattr(f, 'writable'):
+    if not six.PY2 and hasattr(f, 'writable'):
         return f.writable()
 
     if hasattr(f, 'closed') and f.closed:
@@ -343,7 +349,18 @@ def iswritable(f):
     return True
 
 
-if six.PY3:
+if six.PY2:
+    def isfile(f):
+        """
+        Returns True if the given object represents an OS-level file (that is,
+        ``isinstance(f, file)``).
+
+        On Python 3 this also returns True if the given object is higher level
+        wrapper on top of a FileIO object, such as a TextIOWrapper.
+        """
+
+        return isinstance(f, file)
+else:
     def isfile(f):
         """
         Returns True if the given object represents an OS-level file (that is,
@@ -360,34 +377,9 @@ if six.PY3:
         elif hasattr(f, 'raw'):
             return isfile(f.raw)
         return False
-elif six.PY2:
-    def isfile(f):
-        """
-        Returns True if the given object represents an OS-level file (that is,
-        ``isinstance(f, file)``).
-
-        On Python 3 this also returns True if the given object is higher level
-        wrapper on top of a FileIO object, such as a TextIOWrapper.
-        """
-
-        return isinstance(f, file)
 
 
-if six.PY3:
-    def fileobj_open(filename, mode):
-        """
-        A wrapper around the `open()` builtin.
-
-        This exists because in Python 3, `open()` returns an
-        `io.BufferedReader` by default.  This is bad, because
-        `io.BufferedReader` doesn't support random access, which we need in
-        some cases.  In the Python 3 case (implemented in the py3compat module)
-        we must call open with buffering=0 to get a raw random-access file
-        reader.
-        """
-
-        return open(filename, mode, buffering=0)
-elif six.PY2:
+if six.PY2:
     def fileobj_open(filename, mode):
         """
         A wrapper around the `open()` builtin.
@@ -401,6 +393,20 @@ elif six.PY2:
         """
 
         return open(filename, mode)
+else:
+    def fileobj_open(filename, mode):
+        """
+        A wrapper around the `open()` builtin.
+
+        This exists because in Python 3, `open()` returns an
+        `io.BufferedReader` by default.  This is bad, because
+        `io.BufferedReader` doesn't support random access, which we need in
+        some cases.  In the Python 3 case (implemented in the py3compat module)
+        we must call open with buffering=0 to get a raw random-access file
+        reader.
+        """
+
+        return open(filename, mode, buffering=0)
 
 
 def fileobj_name(f):
@@ -461,15 +467,25 @@ def fileobj_mode(f):
 
     # Go from most to least specific--for example gzip objects have a 'mode'
     # attribute, but it's not analogous to the file.mode attribute
+
+    # gzip.GzipFile -like
     if hasattr(f, 'fileobj') and hasattr(f.fileobj, 'mode'):
         fileobj = f.fileobj
+
+    # astropy.io.fits._File -like, doesn't need additional checks because it's
+    # already validated
     elif hasattr(f, 'fileobj_mode'):
-        # Specifically for astropy.io.fits.file._File objects
         return f.fileobj_mode
+
+    # PIL-Image -like investigate the fp (filebuffer)
     elif hasattr(f, 'fp') and hasattr(f.fp, 'mode'):
         fileobj = f.fp
+
+    # FILEIO -like (normal open(...)), keep as is.
     elif hasattr(f, 'mode'):
         fileobj = f
+
+    # Doesn't look like a file-like object, for example strings, urls or paths.
     else:
         return None
 
@@ -480,12 +496,9 @@ def _fileobj_normalize_mode(f):
     """Takes care of some corner cases in Python where the mode string
     is either oddly formatted or does not truly represent the file mode.
     """
-
-    # I've noticed that sometimes Python can produce modes like 'r+b' which I
-    # would consider kind of a bug--mode strings should be normalized.  Let's
-    # normalize it for them:
     mode = f.mode
 
+    # Special case: Gzip modes:
     if isinstance(f, gzip.GzipFile):
         # GzipFiles can be either readonly or writeonly
         if mode == gzip.READ:
@@ -493,165 +506,15 @@ def _fileobj_normalize_mode(f):
         elif mode == gzip.WRITE:
             return 'wb'
         else:
-            # This shouldn't happen?
-            return None
+            return None  # This shouldn't happen?
 
+    # Sometimes Python can produce modes like 'r+b' which will be normalized
+    # here to 'rb+'
     if '+' in mode:
         mode = mode.replace('+', '')
         mode += '+'
 
-    if _fileobj_is_append_mode(f) and 'a' not in mode:
-        mode = mode.replace('r', 'a').replace('w', 'a')
-
     return mode
-
-
-def _fileobj_is_append_mode(f):
-    """Normally the way to tell if a file is in append mode is if it has
-    'a' in the mode string.  However on Python 3 (or in particular with
-    the io module) this can't be relied on.  See
-    http://bugs.python.org/issue18876.
-    """
-
-    if 'a' in f.mode:
-        # Take care of the obvious case first
-        return True
-
-    # We might have an io.FileIO in which case the only way to know for sure
-    # if the file is in append mode is to ask the file descriptor
-    if not hasattr(f, 'fileno'):
-        # Who knows what this is?
-        return False
-
-    # Call platform-specific _is_append_mode
-    # If this file is already closed this can result in an error
-    try:
-        return _is_append_mode_platform(f.fileno())
-    except (ValueError, IOError):
-        return False
-
-
-if sys.platform.startswith('win32'):
-    # This global variable is used in _is_append_mode to cache the computed
-    # size of the ioinfo struct from msvcrt which may have a different size
-    # depending on the version of the library and how it was compiled
-    _sizeof_ioinfo = None
-
-    def _make_is_append_mode():
-        # We build the platform-specific _is_append_mode function for Windows
-        # inside a function factory in order to avoid cluttering the local
-        # namespace with ctypes stuff
-        from ctypes import (cdll, c_size_t, c_void_p, c_int, c_char,
-                            Structure, POINTER, cast)
-
-        try:
-            from ctypes.util import find_msvcrt
-        except ImportError:
-            # find_msvcrt is not available on Python 2.5 so we have to provide
-            # it ourselves anyways
-            from distutils.msvccompiler import get_build_version
-
-            def find_msvcrt():
-                version = get_build_version()
-                if version is None:
-                    # better be safe than sorry
-                    return None
-                if version <= 6:
-                    clibname = 'msvcrt'
-                else:
-                    clibname = 'msvcr%d' % (version * 10)
-
-                # If python was built with in debug mode
-                import imp
-                if imp.get_suffixes()[0][0] == '_d.pyd':
-                    clibname += 'd'
-                return clibname+'.dll'
-
-        def _dummy_is_append_mode(fd):
-            warnings.warn(
-                'Could not find appropriate MS Visual C Runtime '
-                'library or library is corrupt/misconfigured; cannot '
-                'determine whether your file object was opened in append '
-                'mode.  Please consider using a file object opened in write '
-                'mode instead.')
-            return False
-
-        msvcrt_dll = find_msvcrt()
-        if msvcrt_dll is None:
-            # If for some reason the C runtime can't be located then we're dead
-            # in the water.  Just return a dummy function
-            try:
-                # Python3.5 uses msvc14 and it is "recommended" to use
-                # cdll.msvcrt directly. Not sure if that may cause problems.
-                # https://bugs.python.org/issue26727
-                msvcrt = cdll.msvcrt
-            except:
-                # TODO: This except probably should need some Exceptions to
-                # catch ... but since we return a Warning the user is likely
-                # to know that there is something wrong altogether.
-                return _dummy_is_append_mode
-        else:
-            msvcrt = cdll.LoadLibrary(msvcrt_dll)
-
-        # Constants
-        IOINFO_L2E = 5
-        IOINFO_ARRAY_ELTS = 1 << IOINFO_L2E
-        IOINFO_ARRAYS = 64
-        FAPPEND = 0x20
-        _NO_CONSOLE_FILENO = -2
-
-        # Types
-        intptr_t = POINTER(c_int)
-
-        class my_ioinfo(Structure):
-            _fields_ = [('osfhnd', intptr_t),
-                        ('osfile', c_char)]
-
-        # Functions
-        _msize = msvcrt._msize
-        _msize.argtypes = (c_void_p,)
-        _msize.restype = c_size_t
-
-        # Variables
-        # Since we don't know how large the ioinfo struct is just treat the
-        # __pioinfo array as an array of byte pointers
-        __pioinfo = cast(msvcrt.__pioinfo, POINTER(POINTER(c_char)))
-
-        # Determine size of the ioinfo struct; see the comment above where
-        # _sizeof_ioinfo = None is set
-        global _sizeof_ioinfo
-        if __pioinfo[0] is not None:
-            _sizeof_ioinfo = _msize(__pioinfo[0]) // IOINFO_ARRAY_ELTS
-
-        if not _sizeof_ioinfo:
-            # This shouldn't happen, but I suppose it could if one is using a
-            # broken msvcrt, or just happened to have a dll of the same name
-            # lying around.
-            return _dummy_is_append_mode
-
-        def _is_append_mode(fd):
-            global _sizeof_ioinfo
-            if fd != _NO_CONSOLE_FILENO:
-                idx1 = fd >> IOINFO_L2E  # The index into the __pioinfo array
-                # The n-th ioinfo pointer in __pioinfo[idx1]
-                idx2 = fd & ((1 << IOINFO_L2E) - 1)
-                if 0 <= idx1 < IOINFO_ARRAYS and __pioinfo[idx1] is not None:
-                    # Doing pointer arithmetic in ctypes is irritating
-                    pio = c_void_p(cast(__pioinfo[idx1], c_void_p).value +
-                                   idx2 * _sizeof_ioinfo)
-                    ioinfo = cast(pio, POINTER(my_ioinfo)).contents
-                    return bool(ord(ioinfo.osfile) & FAPPEND)
-            return False
-
-        return _is_append_mode
-
-    _is_append_mode_platform = _make_is_append_mode()
-    del _make_is_append_mode
-else:
-    import fcntl
-
-    def _is_append_mode_platform(fd):
-        return bool(fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND)
 
 
 def fileobj_is_binary(f):
@@ -675,16 +538,7 @@ def fileobj_is_binary(f):
         return True
 
 
-if six.PY3:
-    maketrans = str.maketrans
-
-    def translate(s, table, deletechars):
-        if deletechars:
-            table = table.copy()
-            for c in deletechars:
-                table[ord(c)] = None
-        return s.translate(table)
-elif six.PY2:
+if six.PY2:
     maketrans = string.maketrans
 
     def translate(s, table, deletechars):
@@ -702,6 +556,15 @@ elif six.PY2:
             for c in deletechars:
                 table[ord(c)] = None
             return s.translate(table)
+else:
+    maketrans = str.maketrans
+
+    def translate(s, table, deletechars):
+        if deletechars:
+            table = table.copy()
+            for c in deletechars:
+                table[ord(c)] = None
+        return s.translate(table)
 
 
 def fill(text, width, *args, **kwargs):
@@ -824,12 +687,26 @@ def _array_to_file_like(arr, fileobj):
     `numpy.ndarray.tofile`).
     """
 
+    # If the array is empty, we can simply take a shortcut and return since
+    # there is nothing to write.
+    if len(arr) == 0:
+        return
+
     if arr.flags.contiguous:
+
         # It suffices to just pass the underlying buffer directly to the
-        # fileobj's write (assuming it supports the buffer interface, which
-        # unfortunately there's no simple way to check)
-        fileobj.write(arr.data)
-    elif hasattr(np, 'nditer'):
+        # fileobj's write (assuming it supports the buffer interface). If
+        # it does not have the buffer interface, a TypeError should be returned
+        # in which case we can fall back to the other methods.
+
+        try:
+            fileobj.write(arr.data)
+        except TypeError:
+            pass
+        else:
+            return
+
+    if hasattr(np, 'nditer'):
         # nditer version for non-contiguous arrays
         for item in np.nditer(arr):
             fileobj.write(item.tostring())
@@ -902,7 +779,7 @@ def _is_pseudo_unsigned(dtype):
 
 
 def _is_int(val):
-    return isinstance(val, integer_types + (np.integer,))
+    return isinstance(val, all_integer_types)
 
 
 def _str_to_num(val):
@@ -939,7 +816,7 @@ def _words_group(input, strlen):
             offset = blank_loc[loc - 1] + 1
             if loc == 0:
                 offset = -1
-        except:
+        except Exception:
             offset = len(input)
 
         # check for one word longer than strlen, break in the middle
@@ -982,3 +859,26 @@ def _get_array_mmap(array):
         if isinstance(base.base, mmap.mmap):
             return base.base
         base = base.base
+
+
+@contextmanager
+def _free_space_check(hdulist, dirname=None):
+    try:
+        yield
+    except OSError as exc:
+        error_message = ''
+        if not isinstance(hdulist, list):
+            hdulist = [hdulist, ]
+        if dirname is None:
+            dirname = os.path.dirname(hdulist._file.name)
+        if os.path.isdir(dirname):
+            free_space = data.get_free_space_in_dir(dirname)
+            hdulist_size = np.sum(hdu.size for hdu in hdulist)
+            if free_space < hdulist_size:
+                error_message = ("Not enough space on disk: requested {}, "
+                                 "available {}. ".format(hdulist_size, free_space))
+
+        for hdu in hdulist:
+            hdu._close()
+
+        raise OSError(error_message + str(exc))

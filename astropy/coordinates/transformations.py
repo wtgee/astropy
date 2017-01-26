@@ -29,6 +29,7 @@ import numpy as np
 from ..utils.compat import suppress
 from ..utils.compat.funcsigs import signature
 from ..extern import six
+from ..extern.six.moves import range
 
 
 __all__ = ['TransformGraph', 'CoordinateTransform', 'FunctionTransform',
@@ -309,7 +310,7 @@ class TransformGraph(object):
         """
         if not inspect.isclass(fromsys):
             raise TypeError('fromsys is not a class')
-        if not inspect.isclass(fromsys):
+        if not inspect.isclass(tosys):
             raise TypeError('tosys is not a class')
 
         path, distance = self.find_shortest_path(fromsys, tosys)
@@ -754,18 +755,9 @@ class StaticMatrixTransform(CoordinateTransform):
             priority=priority, register_graph=register_graph)
 
     def __call__(self, fromcoord, toframe):
-        from .representation import CartesianRepresentation, \
-                                    UnitSphericalRepresentation
+        from .representation import UnitSphericalRepresentation
 
-        xyz = fromcoord.represent_as(CartesianRepresentation).xyz
-        v = xyz.reshape((3, xyz.size // 3))
-        v2 = np.dot(np.asarray(self.matrix), v)
-        subshape = xyz.shape[1:]
-        x = v2[0].reshape(subshape)
-        y = v2[1].reshape(subshape)
-        z = v2[2].reshape(subshape)
-
-        newrep = CartesianRepresentation(x, y, z)
+        newrep = fromcoord.cartesian.transform(self.matrix)
         if issubclass(fromcoord.data.__class__, UnitSphericalRepresentation):
             #need to special-case this because otherwise the new class will
             #think it has a valid distance

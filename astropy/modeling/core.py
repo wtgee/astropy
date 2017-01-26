@@ -32,17 +32,18 @@ import numpy as np
 
 from ..utils import indent, isinstancemethod, metadata
 from ..extern import six
-from ..extern.six.moves import copyreg
+from ..extern.six.moves import copyreg, zip
 from ..table import Table
 from ..utils import (sharedmethod, find_current_module,
+                     check_broadcast, IncompatibleShapeError,
                      InheritDocstrings, OrderedDescriptorContainer)
 from ..utils.codegen import make_function_with_signature
 from ..utils.compat import suppress
 from ..utils.compat.funcsigs import signature
 from ..utils.exceptions import AstropyDeprecationWarning
-from .utils import (array_repr_oneline, check_broadcast, combine_labels,
+from .utils import (array_repr_oneline, combine_labels,
                     make_binary_operator_eval, ExpressionTree,
-                    IncompatibleShapeError, AliasDict, get_inputs_and_params,
+                    AliasDict, get_inputs_and_params,
                     _BoundingBox)
 from ..nddata.utils import add_array, extract_array
 
@@ -417,7 +418,7 @@ class _ModelMeta(OrderedDescriptorContainer, InheritDocstrings, abc.ABCMeta):
     __or__ =      _model_oper('|')
     __and__ =     _model_oper('&')
 
-    if not six.PY3:
+    if six.PY2:
         # The classic __div__ operator need only be implemented for Python 2
         # without from __future__ import division
         __div__ = _model_oper('/')
@@ -470,7 +471,7 @@ class _ModelMeta(OrderedDescriptorContainer, InheritDocstrings, abc.ABCMeta):
                     parts.append('{0}: {1}'.format(keyword, value))
 
             return '\n'.join(parts)
-        except:
+        except Exception:
             # If any of the above formatting fails fall back on the basic repr
             # (this is particularly useful in debugging)
             return parts[0]
@@ -699,7 +700,7 @@ class Model(object):
     __or__ =      _model_oper('|')
     __and__ =     _model_oper('&')
 
-    if not six.PY3:
+    if six.PY2:
         __div__ = _model_oper('/')
 
     # *** Properties ***
@@ -907,7 +908,7 @@ class Model(object):
 
     @property
     def bounding_box(self):
-        """
+        r"""
         A `tuple` of length `n_inputs` defining the bounding box limits, or
         `None` for no bounding box.
 
@@ -1432,9 +1433,9 @@ class Model(object):
                 default = getattr(self, name).default
 
                 if default is None:
-                    # No value was supplied for the parameter, and the
-                    # parameter does not have a default--therefor the model is
-                    # underspecified
+                    # No value was supplied for the parameter and the
+                    # parameter does not have a default, therefore the model
+                    # is underspecified
                     raise TypeError(
                         "{0}.__init__() requires a value for parameter "
                         "{1!r}".format(self.__class__.__name__, name))
@@ -2014,6 +2015,12 @@ class _CompoundModelMeta(_ModelMeta):
             # computing the inverse
             instance._user_inverse = mcls._make_user_inverse(
                     operator, left, right)
+
+            if left._n_models == right._n_models:
+                instance._n_models = left._n_models
+            else:
+                raise ValueError('Model sets must have the same number of '
+                                 'components.')
 
             return instance
 

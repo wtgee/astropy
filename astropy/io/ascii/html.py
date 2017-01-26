@@ -11,15 +11,17 @@ must be installed to read HTML tables.
 from __future__ import absolute_import, division, print_function
 
 import warnings
+import numpy
 
 from ...extern import six
-from ...extern.six.moves import zip as izip
+from ...extern.six.moves import zip, range
 
 from . import core
 from ...table import Column
 from ...utils.xml import writer
 
 from copy import deepcopy
+
 
 class SoupString(str):
     """
@@ -144,6 +146,11 @@ class HTMLOutputter(core.TableOutputter):
     of <th>).
     """
 
+    default_converters = [core.convert_numpy(numpy.int),
+                          core.convert_numpy(numpy.float),
+                          core.convert_numpy(numpy.str),
+                          core.convert_numpy(numpy.unicode)]
+
     def __call__(self, cols, meta):
         """
         Process the data in multidimensional columns.
@@ -157,7 +164,7 @@ class HTMLOutputter(core.TableOutputter):
                 # Join elements of spanned columns together into list of tuples
                 span_cols = cols[col_num:col_num + col.colspan]
                 new_col = core.Column(col.name)
-                new_col.str_vals = list(izip(*[x.str_vals for x in span_cols]))
+                new_col.str_vals = list(zip(*[x.str_vals for x in span_cols]))
                 new_cols.append(new_col)
                 col_num += col.colspan
             else:
@@ -336,8 +343,15 @@ class HTML(core.BaseReader):
         """
         Return data in ``table`` converted to HTML as a list of strings.
         """
-
         cols = list(six.itervalues(table.columns))
+
+        self.data.header.cols = cols
+
+        if isinstance(self.data.fill_values, tuple):
+            self.data.fill_values = [self.data.fill_values]
+
+        self.data._set_fill_values(cols)
+
         lines = []
 
         # Set HTML escaping to False for any column in the raw_html_cols input
@@ -397,21 +411,26 @@ class HTML(core.BaseReader):
                                 w.end(indent=False)
                         col_str_iters = []
                         new_cols_escaped = []
-                        for col, col_escaped in izip(cols, cols_escaped):
+                        for col, col_escaped in zip(cols, cols_escaped):
                             if len(col.shape) > 1 and self.html['multicol']:
                                 span = col.shape[1]
                                 for i in range(span):
                                     # Split up multicolumns into separate columns
                                     new_col = Column([el[i] for el in col])
-                                    col_str_iters.append(new_col.info.iter_str_vals())
+
+                                    new_col_iter_str_vals = self.fill_values(col, new_col.info.iter_str_vals())
+                                    col_str_iters.append(new_col_iter_str_vals)
                                     new_cols_escaped.append(col_escaped)
                             else:
-                                col_str_iters.append(col.info.iter_str_vals())
+
+                                col_iter_str_vals = self.fill_values(col, col.info.iter_str_vals())
+                                col_str_iters.append(col_iter_str_vals)
+
                                 new_cols_escaped.append(col_escaped)
 
-                    for row in izip(*col_str_iters):
+                    for row in zip(*col_str_iters):
                         with w.tag('tr'):
-                            for el, col_escaped in izip(row, new_cols_escaped):
+                            for el, col_escaped in zip(row, new_cols_escaped):
                                 # Potentially disable HTML escaping for column
                                 method = ('escape_xml' if col_escaped else 'bleach_clean')
                                 with w.xml_cleaning_method(method, **raw_html_clean_kwargs):
@@ -421,3 +440,24 @@ class HTML(core.BaseReader):
 
         # Fixes XMLWriter's insertion of unwanted line breaks
         return [''.join(lines)]
+
+    def fill_values(self, col, col_str_iters):
+        """
+        Return an iterator of the values with replacements based on fill_values
+        """
+        # check if the col is a masked column and has fill values
+        is_masked_column = hasattr(col, 'mask')
+        has_fill_values = hasattr(col, 'fill_values')
+
+        for idx, col_str in enumerate(col_str_iters):
+            if is_masked_column and has_fill_values:
+                if col.mask[idx]:
+                    yield col.fill_values[core.masked]
+                    continue
+
+            if has_fill_values:
+                if col_str in col.fill_values:
+                    yield col.fill_values[col_str]
+                    continue
+
+            yield col_str

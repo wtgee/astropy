@@ -6,7 +6,7 @@ to/from TABLEDATA_ and BINARY_ formats.
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 from ...extern import six
-from ...extern.six.moves import xrange
+from ...extern.six.moves import range, zip
 
 # STDLIB
 import re
@@ -43,7 +43,7 @@ _empty_bytes = b''
 _zero_byte = b'\0'
 
 
-if six.PY3:
+if not six.PY2:
     struct_unpack = _struct_unpack
     struct_pack = _struct_pack
 else:
@@ -102,7 +102,7 @@ def bitarray_to_bool(data, length):
     """
     results = []
     for byte in data:
-        if not six.PY3:
+        if six.PY2:
             byte = ord(byte)
         for bit_no in range(7, -1, -1):
             bit = byte & (1 << bit_no)
@@ -148,7 +148,7 @@ def bool_to_bitarray(value):
     if bit_no != 7:
         bytes.append(byte)
 
-    return struct_pack("%sB" % len(bytes), *bytes)
+    return struct_pack("{}B".format(len(bytes)), *bytes)
 
 
 class Converter(object):
@@ -325,10 +325,10 @@ class Char(Converter):
                 self.arraysize = int(field.arraysize)
             except ValueError:
                 vo_raise(E01, (field.arraysize, 'char', field.ID), config)
-            self.format = 'S%d' % self.arraysize
+            self.format = 'S{:d}'.format(self.arraysize)
             self.binparse = self._binparse_fixed
             self.binoutput = self._binoutput_fixed
-            self._struct_format = ">%ds" % self.arraysize
+            self._struct_format = ">{:d}s".format(self.arraysize)
 
         if config.get('pedantic'):
             self.parse = self._ascii_parse
@@ -402,10 +402,10 @@ class UnicodeChar(Converter):
                 self.arraysize = int(field.arraysize)
             except ValueError:
                 vo_raise(E01, (field.arraysize, 'unicode', field.ID), config)
-            self.format = 'U%d' % self.arraysize
+            self.format = 'U{:d}'.format(self.arraysize)
             self.binparse = self._binparse_fixed
             self.binoutput = self._binoutput_fixed
-            self._struct_format = ">%ds" % (self.arraysize * 2)
+            self._struct_format = ">{:d}s".format(self.arraysize * 2)
 
     def parse(self, value, config=None, pos=None):
         if self.arraysize != '*' and len(value) > self.arraysize:
@@ -491,7 +491,7 @@ class VarArray(Array):
         result = []
         result_mask = []
         binparse = self._base.binparse
-        for i in xrange(length):
+        for i in range(length):
             val, mask = binparse(read)
             result.append(val)
             result_mask.append(mask)
@@ -526,7 +526,7 @@ class ArrayVarArray(VarArray):
             vo_raise(E02, (items, len(parts)), config, pos)
         result = []
         result_mask = []
-        for i in xrange(0, len(parts), items):
+        for i in range(0, len(parts), items):
             value, mask = parse_parts(parts[i:i+items], config, pos)
             result.append(value)
             result_mask.append(mask)
@@ -566,7 +566,7 @@ class NumericArray(Array):
 
         self._base = base
         self._arraysize = arraysize
-        self.format = "%s%s" % (tuple(arraysize), base.format)
+        self.format = "{}{}".format(tuple(arraysize), base.format)
 
         self._items = 1
         for dim in arraysize:
@@ -674,19 +674,24 @@ class FloatingPoint(Numeric):
 
         precision = field.precision
         width = field.width
-        format_parts = ['%']
+
+        if precision is None:
+            format_parts = ['{!r:>']
+        else:
+            format_parts = ['{:']
 
         if width is not None:
             format_parts.append(six.text_type(width))
 
-        if precision is None:
-            format_parts.append('r')
-        elif precision.startswith("E"):
-            format_parts.append('.%dg' % int(precision[1:]))
-        elif precision.startswith("F"):
-            format_parts.append('.%df' % int(precision[1:]))
-        else:
-            format_parts.append('.%df' % int(precision))
+        if precision is not None:
+            if precision.startswith("E"):
+                format_parts.append('.{:d}g'.format(int(precision[1:])))
+            elif precision.startswith("F"):
+                format_parts.append('.{:d}f'.format(int(precision[1:])))
+            else:
+                format_parts.append('.{:d}f'.format(int(precision)))
+
+        format_parts.append('}')
 
         self._output_format = ''.join(format_parts)
 
@@ -736,10 +741,10 @@ class FloatingPoint(Numeric):
         if np.isfinite(value):
             if not np.isscalar(value):
                 value = value.dtype.type(value)
-            result = self._output_format % value
+            result = self._output_format.format(value)
             if result.startswith('array'):
                 raise RuntimeError()
-            if (self._output_format[-1] == 'r' and
+            if (self._output_format[2] == 'r' and
                 result.endswith('.0')):
                 result = result[:-2]
             return result
@@ -750,7 +755,7 @@ class FloatingPoint(Numeric):
         elif np.isneginf(value):
             return '-InF'
         # Should never raise
-        vo_raise("Invalid floating point value '%s'" % value)
+        vo_raise("Invalid floating point value '{}'".format(value))
 
     def binoutput(self, value, mask):
         if mask:
@@ -908,7 +913,7 @@ class ComplexArrayVarArray(VarArray):
             vo_raise(E02, (items, len(parts)), config, pos)
         result = []
         result_mask = []
-        for i in xrange(0, len(parts), items):
+        for i in range(0, len(parts), items):
             value, mask = parse_parts(parts[i:i + items], config, pos)
             result.append(value)
             result_mask.append(mask)
@@ -928,7 +933,7 @@ class ComplexVarArray(VarArray):
         parse_parts = self._base.parse_parts
         result = []
         result_mask = []
-        for i in xrange(0, len(parts), 2):
+        for i in range(0, len(parts), 2):
             value = [float(x) for x in parts[i:i + 2]]
             value, mask = parse_parts(value, config, pos)
             result.append(value)
@@ -960,7 +965,7 @@ class ComplexArray(NumericArray):
         base_parse = self._base.parse_parts
         result = []
         result_mask = []
-        for i in xrange(0, self._items, 2):
+        for i in range(0, self._items, 2):
             value = [float(x) for x in parts[i:i + 2]]
             value, mask = base_parse(value, config, pos)
             result.append(value)
@@ -1006,9 +1011,9 @@ class Complex(FloatingPoint, Array):
                 return 'NaN'
             else:
                 value = self.null
-        real = self._output_format % float(value.real)
-        imag = self._output_format % float(value.imag)
-        if self._output_format[-1] == 'r':
+        real = self._output_format.format(float(value.real))
+        imag = self._output_format.format(float(value.imag))
+        if self._output_format[2] == 'r':
             if real.endswith('.0'):
                 real = real[:-2]
             if imag.endswith('.0'):
@@ -1045,13 +1050,13 @@ class BitArray(NumericArray):
 
     @staticmethod
     def _splitter_pedantic(value, config=None, pos=None):
-        return list(re.sub('\s', '', value))
+        return list(re.sub(r'\s', '', value))
 
     @staticmethod
     def _splitter_lax(value, config=None, pos=None):
         if ',' in value:
             vo_warn(W01, (), config, pos)
-        return list(re.sub('\s|,', '', value))
+        return list(re.sub(r'\s|,', '', value))
 
     def output(self, value, mask):
         if np.any(mask):
@@ -1133,7 +1138,7 @@ class BooleanArray(NumericArray):
         result = []
         result_mask = []
         for char in data:
-            if not six.PY3:
+            if six.PY2:
                 char = ord(char)
             value, mask = binparse(char)
             result.append(value)

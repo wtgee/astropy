@@ -13,6 +13,7 @@ Handles the CDS string format for units
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
+import operator
 import os
 import re
 
@@ -123,7 +124,8 @@ class CDS(Base):
             raise ValueError(
                 "Invalid character at col {0}".format(t.lexpos))
 
-        lexer = lex.lex(optimize=True, lextab='cds_lextab',
+        # PY2: need str() to ensure we do not pass on a unicode object.
+        lexer = lex.lex(optimize=True, lextab=str('cds_lextab'),
                         outputdir=os.path.dirname(__file__),
                         reflags=re.UNICODE)
 
@@ -256,7 +258,8 @@ class CDS(Base):
         def p_error(p):
             raise ValueError()
 
-        parser = yacc.yacc(debug=False, tabmodule='cds_parsetab',
+        # PY2: need str() to ensure we do not pass on a unicode object.
+        parser = yacc.yacc(debug=False, tabmodule=str('cds_parsetab'),
                            outputdir=os.path.dirname(__file__),
                            write_tables=True)
 
@@ -346,7 +349,7 @@ class CDS(Base):
 
             pairs = list(zip(unit.bases, unit.powers))
             if len(pairs) > 0:
-                pairs.sort(key=lambda x: x[1], reverse=True)
+                pairs.sort(key=operator.itemgetter(1), reverse=True)
 
                 s += cls._format_unit_list(pairs)
 

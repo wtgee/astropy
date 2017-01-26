@@ -3,7 +3,7 @@
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 from ...extern import six
-from ...extern.six.moves import xrange, urllib
+from ...extern.six.moves import range, urllib, zip
 
 # STDLIB
 import base64
@@ -122,7 +122,7 @@ def _lookup_by_attr_factory(attr, unique, iterator, element_name, doc):
             if element is before:
                 if getattr(element, attr, None) == ref:
                     vo_raise(
-                        "%s references itself" % element_name,
+                        "{} references itself".format(element_name),
                         element._config, element._pos, KeyError)
                 break
             if getattr(element, attr, None) == ref:
@@ -132,8 +132,8 @@ def _lookup_by_attr_factory(attr, unique, iterator, element_name, doc):
         for element in lookup_by_attr(self, ref, before=before):
             return element
         raise KeyError(
-            "No %s with %s '%s' found before the referencing %s" %
-            (element_name, attr, ref, element_name))
+            "No {} with {} '{}' found before the referencing {}".format(
+                element_name, attr, ref, element_name))
 
     if unique:
         lookup_by_attr_unique.__doc__ = doc
@@ -160,14 +160,14 @@ def _lookup_by_id_or_name_factory(iterator, element_name, doc):
             if element is before:
                 if ref in (element.ID, element.name):
                     vo_raise(
-                        "%s references itself" % element_name,
+                        "{} references itself".format(element_name),
                         element._config, element._pos, KeyError)
                 break
             if ref in (element.ID, element.name):
                 return element
         raise KeyError(
-            "No %s with ID or name '%s' found before the referencing %s" %
-            (element_name, ref, element_name))
+            "No {} with ID or name '{}' found before the referencing {}".format(
+                element_name, ref, element_name))
 
     lookup_by_id_or_name.__doc__ = doc
     return lookup_by_id_or_name
@@ -418,6 +418,9 @@ class Element(object):
     A base class for all classes that represent XML elements in the
     VOTABLE file.
     """
+    _element_name = ''
+    _attr_list = []
+
     def _add_unknown_tag(self, iterator, tag, data, config, pos):
         warn_or_raise(W10, W10, tag, config, pos)
 
@@ -861,7 +864,7 @@ class Values(Element, _IDProperty):
             try:
                 null_val = self._field.converter.parse_scalar(
                     null, self._config, self._pos)[0]
-            except:
+            except Exception:
                 warn_or_raise(W36, W36, null, self._config, self._pos)
                 null_val = self._field.converter.parse_scalar(
                     '0', self._config, self._pos)[0]
@@ -1248,7 +1251,7 @@ class Field(SimpleElement, _IDProperty, _NameProperty, _XtypeProperty,
             i = 2
             new_id = field.ID
             while new_id in unique:
-                new_id = field.ID + "_%d" % i
+                new_id = field.ID + "_{:d}".format(i)
                 i += 1
             if new_id != field.ID:
                 vo_warn(W32, (field.ID, new_id), field._config, field._pos)
@@ -1265,7 +1268,7 @@ class Field(SimpleElement, _IDProperty, _NameProperty, _XtypeProperty,
                 implicit = False
             if new_name != field.ID:
                 while new_name in unique:
-                    new_name = field.name + " %d" % i
+                    new_name = field.name + " {:d}".format(i)
                     i += 1
 
             if (not implicit and
@@ -1601,8 +1604,8 @@ class Param(Field):
     def value(self, value):
         if value is None:
             value = ""
-        if ((six.PY3 and isinstance(value, six.text_type)) or
-            (not six.PY3 and isinstance(value, six.string_types))):
+        if ((not six.PY2 and isinstance(value, six.text_type)) or
+            (six.PY2 and isinstance(value, six.string_types))):
             self._value = self.converter.parse(
                 value, self._config, self._pos)[0]
         else:
@@ -1788,7 +1791,7 @@ class FieldRef(SimpleElement, _UtypeProperty, _UcdProperty):
             if isinstance(field, Field) and field.ID == self.ref:
                 return field
         vo_raise(
-            "No field named '%s'" % self.ref,
+            "No field named '{}'".format(self.ref),
             self._config, self._pos, KeyError)
 
 
@@ -1854,7 +1857,7 @@ class ParamRef(SimpleElement, _UtypeProperty, _UcdProperty):
             if isinstance(param, Param) and param.ID == self.ref:
                 return param
         vo_raise(
-            "No params named '%s'" % self.ref,
+            "No params named '{}'".format(self.ref),
             self._config, self._pos, KeyError)
 
 
@@ -2069,7 +2072,7 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
 
     def __unicode__(self):
         return six.text_type(self.to_table())
-    if six.PY3:
+    if not six.PY2:
         __str__ = __unicode__
 
     @property
@@ -2139,7 +2142,7 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                     "binary2 only supported in votable 1.3 or later",
                     self._config, self._pos)
         elif format not in ('tabledata', 'binary'):
-            vo_raise("Invalid format '%s'" % format,
+            vo_raise("Invalid format '{}'".format(format),
                      self._config, self._pos)
         self._format = format
 
@@ -2223,17 +2226,17 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
 
             dtype = []
             for x in fields:
-                if six.PY3:
-                    if x._unique_name == x.ID:
-                        id = x.ID
-                    else:
-                        id = (x._unique_name, x.ID)
-                else:
+                if six.PY2:
                     if x._unique_name == x.ID:
                         id = x.ID.encode('utf-8')
                     else:
                         id = (x._unique_name.encode('utf-8'),
                               x.ID.encode('utf-8'))
+                else:
+                    if x._unique_name == x.ID:
+                        id = x.ID
+                    else:
+                        id = (x._unique_name, x.ID)
                 dtype.append((id, x.converter.format))
 
             array = np.recarray((nrows,), dtype=np.dtype(dtype))
@@ -2380,7 +2383,7 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                     colnumbers = [names.index(x) for x in columns]
                 except ValueError:
                     raise ValueError(
-                        "Columns '%s' not found in fields list" % columns)
+                        "Columns '{}' not found in fields list".format(columns))
             else:
                 raise TypeError("Invalid columns list")
 
@@ -2491,9 +2494,9 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                                         except Exception as e:
                                             vo_reraise(
                                                 e, config, pos,
-                                                "(in row %d, col '%s')" %
-                                                (len(array_chunk),
-                                                 fields[i].ID))
+                                                "(in row {:d}, col '{}')".format(
+                                                    len(array_chunk),
+                                                    fields[i].ID))
                                     else:
                                         try:
                                             value, mask_value = parsers[i](
@@ -2501,9 +2504,9 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                                         except Exception as e:
                                             vo_reraise(
                                                 e, config, pos,
-                                                "(in row %d, col '%s')" %
-                                                (len(array_chunk),
-                                                 fields[i].ID))
+                                                "(in row {:d}, col '{}')".format(
+                                                    len(array_chunk),
+                                                    fields[i].ID))
                                 except Exception as e:
                                     if invalid == 'exception':
                                         vo_reraise(e, config, pos)
@@ -2584,9 +2587,7 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
             string_io.seek(0)
             read = string_io.read
         else:
-            if not (href.startswith('http') or
-                    href.startswith('ftp') or
-                    href.startswith('file')):
+            if not href.startswith(('http', 'ftp', 'file')):
                 vo_raise(
                     "The vo package only supports remote data through http, " +
                     "ftp or file",
@@ -2599,7 +2600,7 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                     fd = codecs.EncodedFile(fd, 'base64')
                 else:
                     vo_raise(
-                        "Unknown encoding type '%s'" % encoding,
+                        "Unknown encoding type '{}'".format(encoding),
                         self._config, self._pos, NotImplementedError)
             read = fd.read
 
@@ -2645,9 +2646,9 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                     except EOFError:
                         raise
                     except Exception as e:
-                        vo_reraise(e, config, pos,
-                                   "(in row %d, col '%s')" %
-                                   (numrows, fields[i].ID))
+                        vo_reraise(
+                            e, config, pos, "(in row {:d}, col '{}')".format(
+                                numrows, fields[i].ID))
                     row_data.append(value)
                     if mode == 1:
                         row_mask_data.append(value_mask)
@@ -2683,9 +2684,7 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                 else:
                     break
 
-        if not (href.startswith('http') or
-                href.startswith('ftp') or
-                href.startswith('file')):
+        if not href.startswith(('http', 'ftp', 'file')):
             vo_raise(
                 "The vo package only supports remote data through http, "
                 "ftp or file",
@@ -2699,7 +2698,7 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                 fd = codecs.EncodedFile(fd, 'base64')
             else:
                 vo_raise(
-                    "Unknown encoding type '%s'" % encoding,
+                    "Unknown encoding type '{}'".format(encoding),
                     self._config, self._pos, NotImplementedError)
 
         hdulist = fits.open(fd)
@@ -2776,12 +2775,12 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                 indent_spaces = w.get_indentation_spaces()
                 tr_start = indent_spaces + "<TR>\n"
                 tr_end = indent_spaces + "</TR>\n"
-                td = indent_spaces + " <TD>%s</TD>\n"
+                td = indent_spaces + " <TD>{}</TD>\n"
                 td_empty = indent_spaces + " <TD/>\n"
                 fields = [(i, field.converter.output,
                            field.converter.supports_empty_values(kwargs))
                           for i, field in enumerate(fields)]
-                for row in xrange(len(array)):
+                for row in range(len(array)):
                     write(tr_start)
                     array_row = array.data[row]
                     mask_row = array.mask[row]
@@ -2794,11 +2793,12 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                             try:
                                 val = output(data, masked)
                             except Exception as e:
-                                vo_reraise(e,
-                                           additional="(in row %d, col '%s')" %
-                                           (row, self.fields[i].ID))
+                                vo_reraise(
+                                    e,
+                                    additional="(in row {:d}, col '{}')".format(
+                                        row, self.fields[i].ID))
                             if len(val):
-                                write(td % val)
+                                write(td.format(val))
                             else:
                                 write(td_empty)
                     write(tr_end)
@@ -2817,7 +2817,7 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                                 for (i, field) in enumerate(fields)]
 
                 data = io.BytesIO()
-                for row in xrange(len(array)):
+                for row in range(len(array)):
                     array_row = array.data[row]
                     array_mask = array.mask[row]
 
@@ -2830,9 +2830,9 @@ class Table(Element, _IDProperty, _NameProperty, _UcdProperty,
                             chunk = converter(array_row[i], array_mask[i])
                             assert type(chunk) == six.binary_type
                         except Exception as e:
-                            vo_reraise(e,
-                                       additional="(in row %d, col '%s')" %
-                                       (row, fields[i].ID))
+                            vo_reraise(
+                                e, additional="(in row {:d}, col '{}')".format(
+                                    row, fields[i].ID))
                         data.write(chunk)
 
                 w._flush()
@@ -3014,7 +3014,8 @@ class Resource(Element, _IDProperty, _NameProperty, _UtypeProperty,
 
     def __repr__(self):
         buff = io.StringIO()
-        XMLWriter(buff).element(
+        w = XMLWriter(buff)
+        w.element(
             self._element_name,
             attrib=w.object_attrs(self, self._attr_list))
         return buff.getvalue().strip()
@@ -3359,8 +3360,8 @@ class VOTableFile(Element, _IDProperty, _DescriptionProperty):
                             vo_warn(W21, config['version'], config, pos)
 
                     if 'xmlns' in data:
-                        correct_ns = ('http://www.ivoa.net/xml/VOTable/v%s' %
-                                      config['version'])
+                        correct_ns = ('http://www.ivoa.net/xml/VOTable/v{}'.format(
+                                config['version']))
                         if data['xmlns'] != correct_ns:
                             vo_warn(
                                 W41, (correct_ns, data['xmlns']), config, pos)
@@ -3463,18 +3464,18 @@ class VOTableFile(Element, _IDProperty, _DescriptionProperty):
 
             xml_header = """
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Produced with astropy.io.votable version %(lib_version)s
+<!-- Produced with astropy.io.votable version {lib_version}
      http://www.astropy.org/ -->\n"""
-            w.write(xml_header.lstrip() % locals())
+            w.write(xml_header.lstrip().format(**locals()))
 
             with w.tag('VOTABLE',
                        {'version': version,
                         'xmlns:xsi':
                             "http://www.w3.org/2001/XMLSchema-instance",
                         'xsi:noNamespaceSchemaLocation':
-                            "http://www.ivoa.net/xml/VOTable/v%s" % version,
+                            "http://www.ivoa.net/xml/VOTable/v{}".format(version),
                         'xmlns':
-                            "http://www.ivoa.net/xml/VOTable/v%s" % version}):
+                            "http://www.ivoa.net/xml/VOTable/v{}".format(version)}):
                 if self.description is not None:
                     w.element("DESCRIPTION", self.description, wrap=True)
                 element_sets = [self.coordinate_systems, self.params,
@@ -3525,7 +3526,8 @@ class VOTableFile(Element, _IDProperty, _DescriptionProperty):
         for i, table in enumerate(self.iter_tables()):
             if i == idx:
                 return table
-        raise IndexError("No table at index %d found in VOTABLE file." % idx)
+        raise IndexError(
+            "No table at index {:d} found in VOTABLE file.".format(idx))
 
     def iter_fields_and_params(self):
         """

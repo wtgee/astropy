@@ -11,8 +11,8 @@ import os.path
 import numpy as np
 
 from numpy import linalg
+from numpy.testing.utils import assert_raises
 from numpy.testing.utils import assert_allclose, assert_almost_equal
-
 from . import irafutil
 from .. import models
 from ..core import Fittable2DModel, Parameter
@@ -21,12 +21,32 @@ from ...utils import NumpyRNGContext
 from ...utils.data import get_pkg_data_filename
 from ...tests.helper import pytest
 from .utils import ignore_non_integer_warning
+from ...stats import sigma_clip
+
+from ...utils.exceptions import AstropyUserWarning
+from ..fitting import populate_entry_points
+import warnings
 
 try:
     from scipy import optimize
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
+
+HAS_MOCK = True
+try:
+    from unittest import mock
+except ImportError:
+    try:
+        import mock
+    except ImportError:
+        HAS_MOCK = False
+
+try:
+    from pkg_resources import EntryPoint
+    HAS_PKG = True
+except ImportError:
+    HAS_PKG = False
 
 
 fitters = [SimplexLSQFitter, SLSQPLSQFitter]
@@ -403,3 +423,197 @@ class TestNonLinearFitters(object):
 
         assert_allclose(fmod.parameters, beta.A.ravel())
         assert_allclose(olscov, fitter.fit_info['param_cov'])
+
+
+@pytest.mark.skipif('not HAS_MOCK')
+@pytest.mark.skipif('not HAS_PKG')
+class TestEntryPoint(object):
+    """Tests population of fitting with entry point fitters"""
+
+    def setup_class(self):
+        self.exception_not_thrown = Exception("The test should not have gotten here. There was no exception thrown")
+
+    def successfulimport(self):
+            # This should work
+            class goodclass(Fitter):
+                __name__ = "GoodClass"
+            return goodclass
+
+    def raiseimporterror(self):
+        #  This should fail as it raises an Import Error
+        raise ImportError
+
+    def returnbadfunc(self):
+        def badfunc():
+            # This should import but it should fail type check
+            pass
+        return badfunc
+
+    def returnbadclass(self):
+        # This should import But it should fail subclass type check
+        class badclass(object):
+            pass
+        return badclass
+
+    def test_working(self):
+        """This should work fine"""
+        mock_entry_working = mock.create_autospec(EntryPoint)
+        mock_entry_working.name = "Working"
+        mock_entry_working.load = self.successfulimport
+        populate_entry_points([mock_entry_working])
+
+
+    def test_import_error(self):
+        """This raises an import error on load to test that it is handled correctly"""
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error')
+            try:
+                mock_entry_importerror = mock.create_autospec(EntryPoint)
+                mock_entry_importerror.name = "IErr"
+                mock_entry_importerror.load = self.raiseimporterror
+                populate_entry_points([mock_entry_importerror])
+            except AstropyUserWarning as w:
+                if "ImportError" in w.args[0]:  # any error for this case should have this in it.
+                    pass
+                else:
+                    raise w
+            else:
+                raise self.exception_not_thrown
+
+    def test_bad_func(self):
+        """This returns a function which fails the type check"""
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error')
+            try:
+                mock_entry_badfunc = mock.create_autospec(EntryPoint)
+                mock_entry_badfunc.name = "BadFunc"
+                mock_entry_badfunc.load = self.returnbadfunc
+                populate_entry_points([mock_entry_badfunc])
+            except AstropyUserWarning as w:
+                if "Class" in w.args[0]:  # any error for this case should have this in it.
+                    pass
+                else:
+                    raise w
+            else:
+                raise self.exception_not_thrown
+
+    def test_bad_class(self):
+        """This returns a class which doesn't inherient from fitter """
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error')
+            try:
+                mock_entry_badclass = mock.create_autospec(EntryPoint)
+                mock_entry_badclass.name = "BadClass"
+                mock_entry_badclass.load = self.returnbadclass
+                populate_entry_points([mock_entry_badclass])
+            except AstropyUserWarning as w:
+                if 'modeling.Fitter' in w.args[0]:  # any error for this case should have this in it.
+                    pass
+                else:
+                    raise w
+            else:
+                raise self.exception_not_thrown
+
+
+@pytest.mark.skipif('not HAS_SCIPY')
+class Test1DFittingWithOutlierRemoval(object):
+    def setup_class(self):
+        self.x = np.linspace(-5., 5., 200)
+        self.model_params = (3.0, 1.3, 0.8)
+
+        def func(p, x):
+            return p[0]*np.exp(-0.5*(x - p[1])**2/p[2]**2)
+
+        self.y = func(self.model_params, self.x)
+
+    def test_with_fitters_and_sigma_clip(self):
+        import scipy.stats as stats
+
+        np.random.seed(0)
+        c = stats.bernoulli.rvs(0.25, size=self.x.shape)
+        self.y += (np.random.normal(0., 0.2, self.x.shape) +
+                   c*np.random.normal(3.0, 5.0, self.x.shape))
+
+        g_init = models.Gaussian1D(amplitude=1., mean=0, stddev=1.)
+        # test with Levenberg-Marquardt Least Squares fitter
+        fit = FittingWithOutlierRemoval(LevMarLSQFitter(), sigma_clip,
+                                        niter=3, sigma=3.0)
+        _, fitted_model = fit(g_init, self.x, self.y)
+        assert_allclose(fitted_model.parameters, self.model_params, rtol=1e-1)
+        # test with Sequential Least Squares Programming fitter
+        fit = FittingWithOutlierRemoval(SLSQPLSQFitter(), sigma_clip,
+                                        niter=3, sigma=3.0)
+        _, fitted_model = fit(g_init, self.x, self.y)
+        assert_allclose(fitted_model.parameters, self.model_params, rtol=1e-1)
+        # test with Simplex LSQ fitter
+        fit = FittingWithOutlierRemoval(SimplexLSQFitter(), sigma_clip,
+                                        niter=3, sigma=3.0)
+        _, fitted_model = fit(g_init, self.x, self.y)
+        assert_allclose(fitted_model.parameters, self.model_params, atol=1e-1)
+
+
+@pytest.mark.skipif('not HAS_SCIPY')
+class Test2DFittingWithOutlierRemoval(object):
+    def setup_class(self):
+        self.y, self.x = np.mgrid[-3:3:128j, -3:3:128j]
+        self.model_params = (3.0, 1.0, 0.0, 0.8, 0.8)
+
+        def Gaussian_2D(p, pos):
+            return p[0]*np.exp(-0.5*(pos[0] - p[2])**2 / p[4]**2 -
+                               0.5*(pos[1] - p[1])**2 / p[3]**2)
+
+        self.z = Gaussian_2D(self.model_params, np.array([self.y, self.x]))
+
+    def initial_guess(self, data, pos):
+        y = pos[0]
+        x = pos[1]
+
+        """computes the centroid of the data as the initial guess for the
+        center position"""
+
+        wx = x * data
+        wy = y * data
+        total_intensity = np.sum(data)
+        x_mean = np.sum(wx) / total_intensity
+        y_mean = np.sum(wy) / total_intensity
+
+        x_to_pixel = x[0].size / (x[x[0].size - 1][x[0].size - 1] - x[0][0])
+        y_to_pixel = y[0].size / (y[y[0].size - 1][y[0].size - 1] - y[0][0])
+        x_pos = np.around(x_mean * x_to_pixel + x[0].size / 2.).astype(int)
+        y_pos = np.around(y_mean * y_to_pixel + y[0].size / 2.).astype(int)
+
+        amplitude = data[y_pos][x_pos]
+
+        return amplitude, x_mean, y_mean
+
+    def test_with_fitters_and_sigma_clip(self):
+        import scipy.stats as stats
+
+        np.random.seed(0)
+        c = stats.bernoulli.rvs(0.25, size=self.z.shape)
+        self.z += (np.random.normal(0., 0.2, self.z.shape) +
+                   c*np.random.normal(self.z, 2.0, self.z.shape))
+
+        guess = self.initial_guess(self.z, np.array([self.y, self.x]))
+        g2_init = models.Gaussian2D(amplitude=guess[0], x_mean=guess[1],
+                                    y_mean=guess[2], x_stddev=0.75,
+                                    y_stddev=1.25)
+
+        # test with Levenberg-Marquardt Least Squares fitter
+        fit = FittingWithOutlierRemoval(LevMarLSQFitter(), sigma_clip,
+                                        niter=3, sigma=4.)
+        _, fitted_model = fit(g2_init, self.x, self.y, self.z)
+        assert_allclose(fitted_model.parameters[0:5], self.model_params,
+                        atol=1e-1)
+        # test with Sequential Least Squares Programming fitter
+        fit = FittingWithOutlierRemoval(SLSQPLSQFitter(), sigma_clip, niter=3,
+                                        sigma=4.)
+        _, fitted_model = fit(g2_init, self.x, self.y, self.z)
+        assert_allclose(fitted_model.parameters[0:5], self.model_params,
+                        atol=1e-1)
+        # test with Simplex LSQ fitter
+        fit = FittingWithOutlierRemoval(SimplexLSQFitter(), sigma_clip,
+                                        niter=3, sigma=4.)
+        _, fitted_model = fit(g2_init, self.x, self.y, self.z)
+        assert_allclose(fitted_model.parameters[0:5], self.model_params,
+                        atol=1e-1)

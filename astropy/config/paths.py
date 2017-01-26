@@ -34,7 +34,7 @@ def _find_home():
     # in py2.x but not in py3.x
     if six.PY2:
         decodepath = lambda pth: pth.decode(sys.getfilesystemencoding())
-    elif six.PY3:
+    else:
         decodepath = lambda pth: pth
 
     # First find the home directory - this is inspired by the scheme ipython
@@ -71,7 +71,7 @@ def _find_home():
                 homedir = wreg.QueryValueEx(key, 'Personal')[0]
                 homedir = decodepath(homedir)
                 key.Close()
-            except:
+            except Exception:
                 # As a final possible resort, see if HOME is present
                 if 'HOME' in os.environ:
                     homedir = decodepath(os.environ['HOME'])

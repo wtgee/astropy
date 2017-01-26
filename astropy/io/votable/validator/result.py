@@ -64,7 +64,7 @@ class Result(object):
             try:
                 with open(path, 'rb') as fd:
                     self._attributes = pickle.load(fd)
-            except:
+            except Exception:
                 shutil.rmtree(self.get_dirpath())
                 os.makedirs(self.get_dirpath())
                 self._attributes = {}
@@ -104,11 +104,11 @@ class Result(object):
 
         r = None
         try:
-            if six.PY3:
+            if six.PY2:
+                r = urllib.request.urlopen(self.url, timeout=self.timeout)
+            else:
                 r = urllib.request.urlopen(
                     self.url.decode('ascii'), timeout=self.timeout)
-            elif six.PY2:
-                r = urllib.request.urlopen(self.url, timeout=self.timeout)
         except urllib.error.URLError as e:
             if hasattr(e, 'reason'):
                 reason = e.reason
@@ -117,7 +117,7 @@ class Result(object):
             fail(reason)
             return
         except http_client.HTTPException as e:
-            fail("HTTPException: %s" % str(e))
+            fail("HTTPException: {}".format(str(e)))
             return
         except (socket.timeout, socket.error) as e:
             fail("Timeout")
@@ -226,8 +226,8 @@ class Result(object):
     def validate_with_votlint(self, path_to_stilts_jar):
         filename = self.get_vo_xml_path()
         p = subprocess.Popen(
-            "java -jar %s votlint validate=false %s" %
-            (path_to_stilts_jar, filename),
+            "java -jar {} votlint validate=false {}".format(
+                path_to_stilts_jar, filename),
             shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, stderr = p.communicate()
         if len(stdout) or p.returncode:
@@ -332,7 +332,7 @@ def get_result_subsets(results, root, s=None):
         ('version1.2', 'Version 1.2', version_12),
         ('version_unknown', 'Version unknown', version_unknown),
         ('warnings', 'Warnings', has_warnings)]
-    for warning_code, warnings in warning_set:
+    for warning_code, warning in warning_set:
         if s:
             six.next(s)
 
@@ -341,8 +341,8 @@ def get_result_subsets(results, root, s=None):
             warning_descr = warning_class.get_short_name()
             tables.append(
                 (warning_code,
-                 '%s: %s' % (warning_code, warning_descr),
-                 warnings, ['ul', 'li']))
+                 '{}: {}'.format(warning_code, warning_descr),
+                 warning, ['ul', 'li']))
     tables.append(
         ('exceptions', 'Exceptions', has_exceptions))
     for exception_code, exc in exception_set:
@@ -354,7 +354,7 @@ def get_result_subsets(results, root, s=None):
             exception_descr = exception_class.get_short_name()
             tables.append(
                 (exception_code,
-                 '%s: %s' % (exception_code, exception_descr),
+                 '{}: {}'.format(exception_code, exception_descr),
                  exc, ['ul', 'li']))
 
     return tables

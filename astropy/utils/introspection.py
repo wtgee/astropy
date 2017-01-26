@@ -11,6 +11,7 @@ import inspect
 import types
 
 from ..extern import six
+from ..extern.six.moves import range, zip
 
 
 __all__ = ['resolve_name', 'minversion', 'find_current_module',
@@ -328,7 +329,7 @@ def find_mod_objs(modname, onlylocals=False):
     if onlylocals:
         if onlylocals is True:
             onlylocals = [modname]
-        valids = [any([fqn.startswith(nm) for nm in onlylocals]) for fqn in fqnames]
+        valids = [any(fqn.startswith(nm) for nm in onlylocals) for fqn in fqnames]
         localnames = [e for i, e in enumerate(localnames) if valids[i]]
         fqnames = [e for i, e in enumerate(fqnames) if valids[i]]
         objs = [e for i, e in enumerate(objs) if valids[i]]
@@ -383,7 +384,7 @@ def isinstancemethod(cls, obj):
     return _isinstancemethod(cls, obj)
 
 
-if six.PY3:
+if not six.PY2:
     def _isinstancemethod(cls, obj):
         if not isinstance(obj, types.FunctionType):
             return False

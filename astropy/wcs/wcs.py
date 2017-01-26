@@ -33,6 +33,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 # STDLIB
 import copy
 import io
+import itertools
 import os
 import re
 import textwrap
@@ -45,6 +46,7 @@ import numpy as np
 # LOCAL
 from .. import log
 from ..extern import six
+from ..extern.six.moves import range, zip, map, builtins
 from ..io import fits
 from . import _docutil as __
 try:
@@ -65,6 +67,7 @@ if _wcs is not None:
 
 from ..utils.compat import possible_filename
 from ..utils.exceptions import AstropyWarning, AstropyUserWarning, AstropyDeprecationWarning
+from ..utils.decorators import deprecated
 
 if _wcs is not None:
     assert _wcs._sanity_check(), \
@@ -82,7 +85,7 @@ __all__ = ['FITSFixedWarning', 'WCS', 'find_all_wcs',
            'NoWcsKeywordsFoundError', 'InvalidTabularParametersError']
 
 
-if six.PY3 or platform.system() == 'Windows':
+if not six.PY2 or platform.system() == 'Windows':
     __doctest_skip__ = ['WCS.all_world2pix']
 
 
@@ -105,9 +108,7 @@ if _wcs is not None:
 
     # Copy all the constants from the C extension into this module's namespace
     for key, val in _wcs.__dict__.items():
-        if (key.startswith('WCSSUB') or
-            key.startswith('WCSHDR') or
-            key.startswith('WCSHDO')):
+        if key.startswith(('WCSSUB', 'WCSHDR', 'WCSHDO')):
             locals()[key] = val
             __all__.append(key)
 else:
@@ -443,7 +444,7 @@ class WCS(WCSBase):
             det2im = self._read_det2im_kw(header, fobj, err=minerr)
             cpdis = self._read_distortion_kw(
                 header, fobj, dist='CPDIS', err=minerr)
-            sip = self._read_sip_kw(header)
+            sip = self._read_sip_kw(header, wcskey=key)
             self._remove_sip_kw(header)
 
             header_string = header.tostring()
@@ -515,17 +516,18 @@ reduce these to 2 dimensions using the naxis kwarg.
         return new_copy
 
     def __deepcopy__(self, memo):
+        from copy import deepcopy
+
         new_copy = self.__class__()
-        new_copy.naxis = copy.deepcopy(self.naxis, memo)
-        WCSBase.__init__(new_copy, copy.deepcopy(self.sip, memo),
-                         (copy.deepcopy(self.cpdis1, memo),
-                          copy.deepcopy(self.cpdis2, memo)),
-                         copy.deepcopy(self.wcs, memo),
-                         (copy.deepcopy(self.det2im1, memo),
-                          copy.deepcopy(self.det2im2, memo)))
-        for key in self.__dict__:
-            val = self.__dict__[key]
-            new_copy.__dict__[key] = copy.deepcopy(val, memo)
+        new_copy.naxis = deepcopy(self.naxis, memo)
+        WCSBase.__init__(new_copy, deepcopy(self.sip, memo),
+                         (deepcopy(self.cpdis1, memo),
+                          deepcopy(self.cpdis2, memo)),
+                         deepcopy(self.wcs, memo),
+                         (deepcopy(self.det2im1, memo),
+                          deepcopy(self.det2im2, memo)))
+        for key, val in six.iteritems(self.__dict__):
+            new_copy.__dict__[key] = deepcopy(val, memo)
         return new_copy
 
     def copy(self):
@@ -534,6 +536,10 @@ reduce these to 2 dimensions using the naxis kwarg.
 
         Convenience method so user doesn't have to import the
         :mod:`copy` stdlib module.
+
+        .. warning::
+            Use `deepcopy` instead of `copy` unless you know why you need a
+            shallow copy.
         """
         return copy.copy(self)
 
@@ -856,8 +862,7 @@ reduce these to 2 dimensions using the naxis kwarg.
                                      'Coordinate increment along axis')
             header[str('CDELT2')] = (det2im.cdelt[1],
                                      'Coordinate increment along axis')
-            image.update_ext_version(
-                int(hdulist[0].header[str('{0}{1:d}.EXTVER').format(d_kw, num)]))
+            image.ver =  int(hdulist[0].header[str('{0}{1:d}.EXTVER').format(d_kw, num)])
             hdulist.append(image)
         write_d2i(1, self.det2im1)
         write_d2i(2, self.det2im2)
@@ -976,8 +981,7 @@ reduce these to 2 dimensions using the naxis kwarg.
             header[str('CRVAL2')] = (cpdis.crval[1], 'Coordinate system value at reference pixel')
             header[str('CDELT1')] = (cpdis.cdelt[0], 'Coordinate increment along axis')
             header[str('CDELT2')] = (cpdis.cdelt[1], 'Coordinate increment along axis')
-            image.update_ext_version(
-                int(hdulist[0].header[str('{0}{1:d}.EXTVER').format(d_kw, num)]))
+            image.ver = int(hdulist[0].header[str('{0}{1:d}.EXTVER').format(d_kw, num)])
             hdulist.append(image)
 
         write_dist(1, self.cpdis1)
@@ -993,7 +997,7 @@ reduce these to 2 dimensions using the naxis kwarg.
                     if m is not None):
             del header[key]
 
-    def _read_sip_kw(self, header):
+    def _read_sip_kw(self, header, wcskey=""):
         """
         Reads `SIP`_ header keywords and returns a `~astropy.wcs.Sip`
         object.
@@ -1034,19 +1038,24 @@ reduce these to 2 dimensions using the naxis kwarg.
 
             del header[str('A_ORDER')]
             del header[str('B_ORDER')]
-            ctype=[header['CTYPE{0}'.format(nax)] for nax in range(1, self.naxis + 1)]
-            if any([ctyp[-4 :] != '-SIP' for ctyp in ctype]):
+
+            ctype = [header['CTYPE{0}{1}'.format(nax, wcskey)] for nax in range(1, self.naxis + 1)]
+            if any(not ctyp.endswith('-SIP') for ctyp in ctype):
                 message = """
-                Inconsistent SIP distortion information is present in header:
-                SIP coefficients were detected, but CTYPE is missing "-SIP" suffix,
+                Inconsistent SIP distortion information is present in the FITS header and the WCS object:
+                SIP coefficients were detected, but CTYPE is missing a "-SIP" suffix.
+                astropy.wcs is using the SIP distortion coefficients,
                 therefore the coordinates calculated here might be incorrect.
 
-                If image is already distortion-corrected (eg, drizzled) then
-                distortion components should not apply. For such distortion-corrected
-                images, please use ``wcs_pix2world`` or ``wcs_world2pix`` instead.
+                If you do not want to apply the SIP distortion coefficients,
+                please remove the SIP coefficients from the FITS header or the
+                WCS object.  As an example, if the image is already distortion-corrected
+                (e.g., drizzled) then distortion components should not apply and the SIP
+                coefficients should be removed.
 
-                If image is not yet distortion-corrected (eg, not yet drizzled), then
-                please inspect the header and make appropriate changes before rerunning.
+                While the SIP distortion coefficients are being applied here, if that was indeed the intent,
+                for consistency please append "-SIP" to the CTYPE in the FITS header or the WCS object.
+
                 """
                 log.info(message)
         elif str("B_ORDER") in header and header[str('B_ORDER')] > 1:
@@ -1240,7 +1249,7 @@ reduce these to 2 dimensions using the naxis kwarg.
                 xy, origin = args
                 xy = np.asarray(xy)
                 origin = int(origin)
-            except:
+            except Exception:
                 raise TypeError(
                     "When providing two arguments, they must be "
                     "(coords[N][{0}], origin)".format(self.naxis))
@@ -1254,7 +1263,7 @@ reduce these to 2 dimensions using the naxis kwarg.
             try:
                 axes = [np.asarray(x) for x in axes]
                 origin = int(origin)
-            except:
+            except Exception:
                 raise TypeError(
                     "When providing more than two arguments, they must be " +
                     "a 1-D array for each axis, followed by an origin.")
@@ -1890,7 +1899,7 @@ reduce these to 2 dimensions using the naxis kwarg.
                HST's ACS/WFC detector, which has the strongest
                distortions of all HST instruments, testing has
                shown that enabling this option would lead to a about
-               50-100\% penalty in computational time (depending on
+               50-100% penalty in computational time (depending on
                specifics of the image, geometric distortions, and
                number of input points to be converted). Therefore,
                for HST and possibly instruments, it is recommended
@@ -1953,7 +1962,7 @@ reduce these to 2 dimensions using the naxis kwarg.
 
             .. note::
                Based on our testing using HST ACS/WFC images, setting
-               ``detect_divergence`` to `True` will incur about 5-20\%
+               ``detect_divergence`` to `True` will incur about 5-20%
                performance penalty with the larger penalty
                corresponding to ``adaptive`` set to `True`.
                Because the benefits of enabling this
@@ -2529,7 +2538,7 @@ reduce these to 2 dimensions using the naxis kwarg.
             header = fits.Header()
 
         if do_sip and self.sip is not None:
-            if self.wcs is not None and any([ctyp[-4 :] != '-SIP' for ctyp in self.wcs.ctype]):
+            if self.wcs is not None and any(not ctyp.endswith('-SIP') for ctyp in self.wcs.ctype):
                 self._fix_ctype(header, add_sip=True)
 
             for kw, val in self._write_sip_kw().items():
@@ -2581,18 +2590,6 @@ reduce these to 2 dimensions using the naxis kwarg.
             CTYPE if it is missing.
         """
 
-        _strip_sip_from_ctype = """
-        Warning: to_header() was invoked without ``relax=True``: stripping all SIP
-        coefficients from output header, and stripping "-SIP" from output CTYPE
-        if it was originally present.
-
-        Therefore astrometry obtained for output image may be different from
-        original image because SIP is no longer present.
-
-        Please inspect the headers of input and output images to verify, and
-        modify the headers if necessary.
-        """
-
         _add_sip_to_ctype = """
         Inconsistent SIP distortion information is present in the current WCS:
         SIP coefficients were detected, but CTYPE is missing "-SIP" suffix,
@@ -2606,14 +2603,13 @@ reduce these to 2 dimensions using the naxis kwarg.
 
         Therefore, if current WCS is already distortion-corrected (eg, drizzled)
         then SIP distortion components should not apply. In that case, for a WCS
-        that is already distortion-corrected, please do not set relax=True.
+        that is already distortion-corrected, please remove the SIP coefficients
+        from the header.
 
         """
         if log_message:
             if add_sip:
                 log.info(_add_sip_to_ctype)
-            else:
-                log.info(_strip_sip_from_ctype)
         for i in range(1, self.naxis+1):
             # strip() must be called here to cover the case of alt key= " "
             kw = 'CTYPE{0}{1}'.format(i, self.wcs.alt).strip()
@@ -2622,7 +2618,7 @@ reduce these to 2 dimensions using the naxis kwarg.
                     val = header[kw].strip("-SIP") + "-SIP"
                 else:
                     val = header[kw].strip("-SIP")
-                    header[kw] = val
+                header[kw] = val
             else:
                 continue
         return header
@@ -2634,7 +2630,8 @@ reduce these to 2 dimensions using the naxis kwarg.
         """
         return str(self.to_header(relax))
 
-    def footprint_to_file(self, filename=None, color='green', width=2):
+    def footprint_to_file(self, filename='footprint.reg', color='green',
+                          width=2, coordsys=None):
         """
         Writes out a `ds9`_ style regions file. It can be loaded
         directly by `ds9`_.
@@ -2649,30 +2646,66 @@ reduce these to 2 dimensions using the naxis kwarg.
 
         width : int, optional
             Width of the region line.
-        """
-        if not filename:
-            filename = 'footprint.reg'
-        comments = '# Region file format: DS9 version 4.0 \n'
-        comments += ('# global color=green font="helvetica 12 bold ' +
-                     'select=1 highlite=1 edit=1 move=1 delete=1 ' +
-                     'include=1 fixed=0 source\n')
 
-        f = open(filename, 'a')
-        f.write(comments)
-        f.write('linear\n')
-        f.write('polygon(')
-        self.calc_footprint().tofile(f, sep=',')
-        f.write(') # color={0}, width={1:d} \n'.format(color, width))
-        f.close()
+        coordsys : str, optional
+            Coordinate system. If not specified (default), the ``radesys``
+            value is used. For all possible values, see
+            http://ds9.si.edu/doc/ref/region.html#RegionFileFormat
+
+        """
+        comments = ('# Region file format: DS9 version 4.0 \n'
+                    '# global color=green font="helvetica 12 bold '
+                    'select=1 highlite=1 edit=1 move=1 delete=1 '
+                    'include=1 fixed=0 source\n')
+
+        coordsys = coordsys or self.wcs.radesys
+
+        if coordsys not in ('PHYSICAL', 'IMAGE', 'FK4', 'B1950', 'FK5',
+                            'J2000', 'GALACTIC', 'ECLIPTIC', 'ICRS', 'LINEAR',
+                            'AMPLIFIER', 'DETECTOR'):
+            raise ValueError("Coordinate system '{}' is not supported. A valid"
+                             " one can be given with the 'coordsys' argument."
+                             .format(coordsys))
+
+        with open(filename, mode='w') as f:
+            f.write(comments)
+            f.write('{}\n'.format(coordsys))
+            f.write('polygon(')
+            self.calc_footprint().tofile(f, sep=',')
+            f.write(') # color={0}, width={1:d} \n'.format(color, width))
+
+    @property
+    def _naxis1(self):
+        return self._naxis[0]
+
+    @_naxis1.setter
+    def _naxis1(self, value):
+        self._naxis[0] = value
+
+    @property
+    def _naxis2(self):
+        return self._naxis[1]
+
+    @_naxis2.setter
+    def _naxis2(self, value):
+        self._naxis[1] = value
 
     def _get_naxis(self, header=None):
-        self._naxis1 = 0
-        self._naxis2 = 0
+        _naxis = []
         if (header is not None and
-            not isinstance(header, (six.text_type, six.binary_type))):
-            self._naxis1 = header.get('NAXIS1', 0)
-            self._naxis2 = header.get('NAXIS2', 0)
+                not isinstance(header, (six.text_type, six.binary_type))):
+            for naxis in itertools.count(1):
+                try:
+                    _naxis.append(header['NAXIS{}'.format(naxis)])
+                except KeyError:
+                    break
+        if len(_naxis) == 0:
+            _naxis = [0, 0]
+        elif len(_naxis) == 1:
+            _naxis.append(0)
+        self._naxis = _naxis
 
+    @deprecated('1.3')
     def rotateCD(self, theta):
         _theta = np.deg2rad(theta)
         _mrot = np.zeros(shape=(2, 2), dtype=np.double)
@@ -2715,8 +2748,7 @@ reduce these to 2 dimensions using the naxis kwarg.
                 s += sfmt
                 description.append(s.format(*self.wcs.cd[i]))
 
-        description.append('NAXIS    : {0!r} {1!r}'.format(self._naxis1,
-                           self._naxis2))
+        description.append('NAXIS : {}'.format('  '.join(map(str, self._naxis))))
         return '\n'.join(description)
 
     def get_axis_types(self):
@@ -2913,7 +2945,7 @@ reduce these to 2 dimensions using the naxis kwarg.
         elif not hasattr(view, '__len__'): # view MUST be an iterable
             view = [view]
 
-        if not all([isinstance(x, slice) for x in view]):
+        if not all(isinstance(x, slice) for x in view):
             raise ValueError("Cannot downsample a WCS with indexing.  Use "
                              "wcs.sub or wcs.dropaxis if you want to remove "
                              "axes.")
@@ -2923,6 +2955,12 @@ reduce these to 2 dimensions using the naxis kwarg.
             if iview.step is not None and iview.step < 0:
                 raise NotImplementedError("Reversing an axis is not "
                                           "implemented.")
+
+            if numpy_order:
+                wcs_index = self.wcs.naxis - 1 - i
+            else:
+                wcs_index = i
+
             if iview.step is not None and iview.start is None:
                 # Slice from "None" is equivalent to slice from 0 (but one
                 # might want to downsample, so allow slices with
@@ -2930,11 +2968,6 @@ reduce these to 2 dimensions using the naxis kwarg.
                 iview = slice(0, iview.stop, iview.step)
 
             if iview.start is not None:
-                if numpy_order:
-                    wcs_index = self.wcs.naxis - 1 - i
-                else:
-                    wcs_index = i
-
                 if iview.step not in (None, 1):
                     crpix = self.wcs.crpix[wcs_index]
                     cdelt = self.wcs.cdelt[wcs_index]
@@ -2947,6 +2980,20 @@ reduce these to 2 dimensions using the naxis kwarg.
                     wcs_new.wcs.cdelt[wcs_index] = cdelt * iview.step
                 else:
                     wcs_new.wcs.crpix[wcs_index] -= iview.start
+
+            try:
+                # range requires integers but the other attributes can also
+                # handle arbitary values, so this needs to be in a try/except.
+                nitems = len(builtins.range(self._naxis[wcs_index])[iview])
+            except TypeError as exc:
+                if 'indices must be integers' not in str(exc):
+                    raise
+                warnings.warn("NAXIS{0} attribute is not updated because at "
+                              "least one indix ('{1}') is no integer."
+                              "".format(wcs_index, iview), AstropyUserWarning)
+            else:
+                wcs_new._naxis[wcs_index] = nitems
+
         return wcs_new
 
     def __getitem__(self, item):
@@ -3023,11 +3070,7 @@ reduce these to 2 dimensions using the naxis kwarg.
         """
         Compatibility hook for Matplotlib and WCSAxes.
 
-        This functionality requires the WCSAxes package to work. The reason
-        we include this here is that it allows users to use WCSAxes without
-        having to explicitly import WCSAxes, which means that if in future we
-        merge WCSAxes into the Astropy core package, the API will remain the
-        same. With this method, one can do:
+        With this method, one can do:
 
             from astropy.wcs import WCS
             import matplotlib.pyplot as plt
@@ -3039,18 +3082,10 @@ reduce these to 2 dimensions using the naxis kwarg.
             ...
 
         and this will generate a plot with the correct WCS coordinates on the
-        axes. See http://wcsaxes.readthedocs.io for more information.
+        axes.
         """
-
-        try:
-            from wcsaxes import WCSAxes
-        except ImportError:
-            raise ImportError("Using WCS instances as Matplotlib projections "
-                              "requires the WCSAxes package to be installed. "
-                              "See http://wcsaxes.readthedocs.io for more "
-                              "details.")
-        else:
-            return WCSAxes, {'wcs': self}
+        from ..visualization.wcsaxes import WCSAxes
+        return WCSAxes, {'wcs': self}
 
 
 def __WCS_unpickle__(cls, dct, fits_data):

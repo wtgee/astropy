@@ -231,6 +231,51 @@ You can find out what the latest version of astropy-helpers is by checking the
 `astropy-helpers <https://pypi.python.org/pypi/astropy-helpers/>`__ entry on
 PyPI.
 
+Customizing the documentation CSS
+---------------------------------
+
+As described in the documentation configuration file (`teplate/docs/conf.py
+<https://github.com/astropy/package-template/blob/master/docs/conf.py#L95>`_),
+the documentation uses a custom theme based on `bootstrap
+<http://getbootstrap.com/css/>`_. You can swap out this theme by editing the
+configuration file. You can also tweak aspects of the documentation theme by
+creating a custom CSS file in your package documentation.
+
+To do this, create a new CSS file in ``<packagename>/_static/`` -- let's call it
+``<packagename>.css``::
+
+    cd <packagename>/_static/
+    touch <packagename>.css
+
+We're going to set the HTML style to this new ``<packagename>.css`` stylesheet,
+so we need to import the original ``bootstrap-astropy`` style before we start
+modifying entries. To the first line of your ``<packagename>.css`` file, import
+the default style. We can add any custom CSS below the import. For example, to
+hide the Astropy logo and Astropy link from your project's documentation menu
+bar:
+
+.. code-block:: css
+
+    @import url("bootstrap-astropy.css");
+
+    div.topbar a.brand {
+        background: none;
+        background-image: none;
+    }
+
+    div.topbar ul li a.homelink {
+        background: none;
+        background-image: none;
+    }
+
+We now have to include the ``<packagename>.css`` in the documentation, and tell
+Sphinx to use the new style. To do this, edit your
+``<packagename>/docs/conf.py`` file and add the lines::
+
+    # Static files to copy after template files
+    html_static_path = ['_static']
+    html_style = '<packagename>.css'
+
 Managing the template files via git
 ===================================
 
@@ -269,6 +314,12 @@ files manually`_ section since this explains what many of the files do.
       or just delete it.
    #. Exit out of your text editor.
 
+#. Move the main source directory to reflect the name of your package.
+   To tell your DVCS about this move, you should use it, and not ``mv``
+   directly, to make the move.  For example, with git::
+
+    git mv packagename <packagename>
+
 #. Update the main package docstring in ``<packagename>/__init__.py``.
 
 #. Decide what license you want to use to release your source code. If
@@ -282,17 +333,15 @@ files manually`_ section since this explains what many of the files do.
    license.
 
 #. Take a moment to look over the ``<packagename>/example_mod.py``,
-   ``<packagename>/tests/test_example.py``, ``scripts/script_example``,
-   and ``<packagename>/example_c.pyx`` files, as well as the
-   ``<packagename>/example_subpkg`` directory. These are examples of a
-   pure-python module, a test script, an example command-line script, a
+   ``<packagename>/tests/test_example.py``, and ``<packagename>/example_c.pyx``
+   files, as well as the ``<packagename>/example_subpkg`` directory.
+   These are examples of a pure-python module, a test script, a
    `Cython`_ module, and a sub-package, respectively. (`Cython`_ is a
    way to compile python-like code to C to make it run faster - see the
    project's web site for details). These are provided as examples of
    standard way to lay these out. Once you understand these, though,
    you'll want to delete them (and later replace with your own)::
 
-      git rm scripts/script_example
       git rm <packagename>/example_c.pyx
       git rm <packagename>/tests/test_example.py
       git rm -r <packagename>/example_subpkg
@@ -303,12 +352,6 @@ files manually`_ section since this explains what many of the files do.
    directly to github's web site. To do this, set ``edit_on_github`` in
    ``setup.cfg`` to ``True`` and set ``github_project`` to the name of
    your project on github.
-
-#. Move the main source directory to reflect the name of your package.
-   To tell your DVCS about this move, you should use it, and not ``mv``
-   directly, to make the move.  For example, with git::
-
-    git mv packagename <packagename>
 
 #. Update the names of the documentation files to match your package's name.
    First open ``docs/index.rst`` in a text editor and change the text
@@ -411,7 +454,9 @@ files manually`_ section since this explains what many of the files do.
    package on `Read the Docs <https://readthedocs.org>`_ should work:
 
    - activate ``Install your project inside a virtualenv using setup.py install``
-   - Requirements file: ``docs/rtd-pip-requirements``
+   - copy these additional files from the package template into the top-level
+     directory of your package: ``.rtd-environment.yml`` and ``readthedocs.yml``.
+     Edit ``.rtd-environment.yml`` with your package name and requirements.
    - activate ``Give the virtual environment access to the global site-packages dir.``
 
    All other settings can stay on their default value.

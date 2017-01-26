@@ -3,6 +3,7 @@
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from ...extern import six
+from ...extern.six.moves import map
 
 # STDLIB
 import multiprocessing
@@ -130,7 +131,7 @@ def check_conesearch_sites(destdir=os.curdir, verbose=True, parallel=True,
     # Validate only a subset of the services.
     if url_list is not None:
         # Make sure URL is unique and fixed.
-        url_list = set(six.moves.map(unescape_all,
+        url_list = set(map(unescape_all,
             [cur_url.encode('utf-8') if isinstance(cur_url, str) else cur_url
              for cur_url in url_list]))
         uniq_rows = len(url_list)
@@ -217,7 +218,7 @@ def check_conesearch_sites(destdir=os.curdir, verbose=True, parallel=True,
     for key in db_file:
         n[key] = len(js_tree[key])
         n_tot += n[key]
-        js_tree[key].to_json(db_file[key], clobber=True)
+        js_tree[key].to_json(db_file[key], overwrite=True)
         if verbose:
             log.info('{0}: {1} catalog(s)'.format(key, n[key]))
 

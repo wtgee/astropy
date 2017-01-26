@@ -21,7 +21,8 @@ from ..util import (_is_pseudo_unsigned, _unsigned_zero, _is_int,
                     _get_array_mmap)
 
 from ....extern.six import string_types, iteritems
-from ....utils import lazyproperty, deprecated
+from ....extern.six.moves import range
+from ....utils import lazyproperty
 from ....utils.compat import suppress
 from ....utils.exceptions import (AstropyPendingDeprecationWarning,
                                   AstropyUserWarning)
@@ -160,7 +161,7 @@ class CompImageHeader(Header):
             keyword, index = key, None
 
         if key not in self:
-            raise KeyError("Keyword %r not found." % key)
+            raise KeyError("Keyword {!r} not found.".format(key))
 
         super(CompImageHeader, self).__delitem__(key)
 
@@ -184,7 +185,7 @@ class CompImageHeader(Header):
         elif not isinstance(card, Card):
             raise ValueError(
                 'The value appended to a Header must be either a keyword or '
-                '(keyword, value, [comment]) tuple; got: %r' % card)
+                '(keyword, value, [comment]) tuple; got: {!r}'.format(card))
 
         if self._is_reserved_keyword(card.keyword):
             return
@@ -217,7 +218,7 @@ class CompImageHeader(Header):
         elif not isinstance(card, Card):
             raise ValueError(
                 'The value inserted into a Header must be either a keyword or '
-                '(keyword, value, [comment]) tuple; got: %r' % card)
+                '(keyword, value, [comment]) tuple; got: {!r}'.format(card))
 
         if self._is_reserved_keyword(card.keyword):
             return
@@ -290,9 +291,9 @@ class CompImageHeader(Header):
 
     @classmethod
     def _is_reserved_keyword(cls, keyword, warn=True):
-        msg = ('Keyword %r is reserved for use by the FITS Tiled Image '
+        msg = ('Keyword {!r} is reserved for use by the FITS Tiled Image '
                'Convention and will not be stored in the header for the '
-               'image being compressed.' % keyword)
+               'image being compressed.'.format(keyword))
 
         if keyword == 'TFIELDS':
             if warn:
@@ -336,7 +337,7 @@ class CompImageHeader(Header):
                 is_naxisn = index > 0
 
         if is_naxisn:
-            return 'ZNAXIS%d' % index
+            return 'ZNAXIS{}'.format(index)
 
         # If the keyword does not need to be remapped then just return the
         # original keyword
@@ -609,9 +610,9 @@ class CompImageHDU(BinTableHDU):
         compression_opts = {}
         for oldarg, newarg in self.DEPRECATED_KWARGS.items():
             if oldarg in kwargs:
-                warnings.warn('Keyword argument %s to %s is pending '
-                              'deprecation; use %s instead' %
-                              (oldarg, self.__class__.__name__, newarg),
+                warnings.warn('Keyword argument {} to {} is pending '
+                              'deprecation; use {} instead'.format(
+                        oldarg, self.__class__.__name__, newarg),
                               AstropyPendingDeprecationWarning)
                 compression_opts[newarg] = kwargs[oldarg]
                 del kwargs[oldarg]
@@ -775,8 +776,8 @@ class CompImageHDU(BinTableHDU):
             if huge_hdu and not CFITSIO_SUPPORTS_Q_FORMAT:
                 raise IOError(
                     "Astropy cannot compress images greater than 4 GB in size "
-                    "(%s is %s bytes) without CFITSIO >= 3.35" %
-                    ((self.name, self.ver), self.data.nbytes))
+                    "({} is {} bytes) without CFITSIO >= 3.35".format(
+                        (self.name, self.ver), self.data.nbytes))
         else:
             huge_hdu = False
 
@@ -797,8 +798,8 @@ class CompImageHDU(BinTableHDU):
             if compression_type not in ['RICE_1', 'GZIP_1', 'PLIO_1',
                                         'HCOMPRESS_1']:
                 warnings.warn('Unknown compression type provided.  Default '
-                              '(%s) compression used.' %
-                              DEFAULT_COMPRESSION_TYPE, AstropyUserWarning)
+                              '({}) compression used.'.format(
+                        DEFAULT_COMPRESSION_TYPE), AstropyUserWarning)
                 compression_type = DEFAULT_COMPRESSION_TYPE
 
             self._header.set('ZCMPTYPE', compression_type,
@@ -1218,7 +1219,7 @@ class CompImageHDU(BinTableHDU):
                                            SUBTRACTIVE_DITHER_2]:
                     name = QUANTIZE_METHOD_NAMES[DEFAULT_QUANTIZE_METHOD]
                     warnings.warn('Unknown quantization method provided.  '
-                                  'Default method (%s) used.' % name)
+                                  'Default method ({}) used.'.format(name))
                     quantize_method = DEFAULT_QUANTIZE_METHOD
 
                 if quantize_method == NO_DITHER:
@@ -1361,21 +1362,6 @@ class CompImageHDU(BinTableHDU):
             for _ in range(required_blanks - table_blanks):
                 self._header.append()
 
-    @deprecated('0.3', alternative='(refactor your code)', pending=True)
-    def updateHeaderData(self, image_header,
-                         name=None,
-                         compressionType=None,
-                         tileSize=None,
-                         hcompScale=None,
-                         hcompSmooth=None,
-                         quantizeLevel=None):
-        self._update_header_data(image_header, name=name,
-                                 compression_type=compressionType,
-                                 tile_size=tileSize,
-                                 hcomp_scale=hcompScale,
-                                 hcomp_smooth=hcompSmooth,
-                                 quantize_level=quantizeLevel)
-
     @lazyproperty
     def data(self):
         # The data attribute is the image data (not the table data).
@@ -1405,7 +1391,11 @@ class CompImageHDU(BinTableHDU):
             if self._bscale != 1:
                 np.multiply(data, self._bscale, data)
             if self._bzero != 0:
-                data += self._bzero
+                # We have to explcitly cast self._bzero to prevent numpy from
+                # raising an error when doing self.data += self._bzero, and we
+                # do this instead of self.data = self.data + self._bzero to
+                # avoid doubling memory usage.
+                np.add(data, self._bzero, out=data, casting='unsafe')
 
             if zblank is not None:
                 data = np.where(blanks, np.nan, data)
@@ -1419,9 +1409,9 @@ class CompImageHDU(BinTableHDU):
     def data(self, data):
         if (data is not None) and (not isinstance(data, np.ndarray) or
                 data.dtype.fields is not None):
-            raise TypeError('CompImageHDU data has incorrect type:%s; '
-                            'dtype.fields = %s' %
-                            (type(data), data.dtype.fields))
+            raise TypeError('CompImageHDU data has incorrect type:{}; '
+                            'dtype.fields = {}'.format(
+                    type(data), data.dtype.fields))
 
     @lazyproperty
     def compressed_data(self):
@@ -1461,12 +1451,6 @@ class CompImageHDU(BinTableHDU):
             # since this reference leak can sometimes hang around longer than
             # welcome go ahead and force a garbage collection
             gc.collect()
-
-    @lazyproperty
-    @deprecated('0.3', alternative='the ``compressed_data`` attribute',
-                pending=True)
-    def compData(self):
-        return self.compressed_data
 
     @property
     def shape(self):
@@ -1534,7 +1518,7 @@ class CompImageHDU(BinTableHDU):
         for keyword in list(image_header['NAXIS?*']):
             try:
                 n = int(keyword[5:])
-            except:
+            except Exception:
                 continue
 
             if n > naxis:
@@ -1650,7 +1634,7 @@ class CompImageHDU(BinTableHDU):
             # Convert the unsigned array to signed
             self.data = np.array(
                 self.data - _unsigned_zero(self.data.dtype),
-                dtype='=i%d' % self.data.dtype.itemsize)
+                dtype='=i{}'.format(self.data.dtype.itemsize))
             should_swap = False
         else:
             should_swap = not self.data.dtype.isnative
@@ -1693,16 +1677,6 @@ class CompImageHDU(BinTableHDU):
         self.compressed_data._coldefs = self.columns
         self.compressed_data._heapoffset = self._theap
         self.compressed_data._heapsize = heapsize
-
-    @deprecated('0.3', alternative='(refactor your code)')
-    def updateCompressedData(self):
-        self._update_compressed_data()
-
-    @deprecated('0.3',
-                alternative='(refactor your code; this function no '
-                            'longer does anything)')
-    def updateHeader(self):
-        pass
 
     def scale(self, type=None, option='old', bscale=1, bzero=0):
         """
@@ -1769,7 +1743,11 @@ class CompImageHDU(BinTableHDU):
 
         # Do the scaling
         if _zero != 0:
-            self.data += -_zero
+            # We have to explicitly cast self._bzero to prevent numpy from
+            # raising an error when doing self.data -= _zero, and we
+            # do this instead of self.data = self.data - _zero to
+            # avoid doubling memory usage.
+            np.subtract(self.data, _zero, out=self.data, casting='unsafe')
             self.header['BZERO'] = _zero
         else:
             # Delete from both headers
@@ -1876,9 +1854,6 @@ class CompImageHDU(BinTableHDU):
         if (closed and self._data_loaded and
                 _get_array_mmap(self.compressed_data) is not None):
             del self.compressed_data
-            # Close off the deprected compData attribute as well if it has been
-            # used
-            del self.compData
 
     # TODO: This was copied right out of _ImageBaseHDU; get rid of it once we
     # find a way to rewrite this class as either a subclass or wrapper for an
@@ -1936,12 +1911,12 @@ class CompImageHDU(BinTableHDU):
                 "Seed for random dithering must be either between 1 and "
                 "10000 inclusive, 0 for autogeneration from the system "
                 "clock, or -1 for autogeneration from a checksum of the first "
-                "image tile (got %s)" % seed)
+                "image tile (got {})".format(seed))
 
         if seed == DITHER_SEED_CHECKSUM:
             # Determine the tile dimensions from the ZTILEn keywords
             naxis = self._header['ZNAXIS']
-            tile_dims = [self._header['ZTILE%d' % (idx + 1)]
+            tile_dims = [self._header['ZTILE{}'.format(idx + 1)]
                          for idx in range(naxis)]
             tile_dims.reverse()
 

@@ -4,6 +4,7 @@ import textwrap
 from ..table import Table
 from ... import extern
 from ...tests.helper import pytest
+from ...extern.six.moves import zip
 
 try:
     import IPython  # pylint: disable=W0611
@@ -78,9 +79,9 @@ def test_write_jsviewer_default(tmpdir):
         table_id='table%s' % id(t),
         length='50',
         display_length='10, 25, 50, 100, 500, 1000',
-        datatables_css_url='https://cdn.datatables.net/1.10.9/css/jquery.dataTables.css',
-        datatables_js_url='https://cdn.datatables.net/1.10.9/js/jquery.dataTables.min.js',
-        jquery_url='https://code.jquery.com/jquery-1.11.3.min.js'
+        datatables_css_url='https://cdn.datatables.net/1.10.12/css/jquery.dataTables.css',
+        datatables_js_url='https://cdn.datatables.net/1.10.12/js/jquery.dataTables.min.js',
+        jquery_url='https://code.jquery.com/jquery-3.1.1.min.js'
     )
     with open(tmpfile) as f:
         assert f.read().strip() == ref.strip()
@@ -102,9 +103,9 @@ def test_write_jsviewer_options(tmpdir):
         table_id='test',
         length='5',
         display_length='5, 10, 25, 50, 100, 500, 1000',
-        datatables_css_url='https://cdn.datatables.net/1.10.9/css/jquery.dataTables.css',
-        datatables_js_url='https://cdn.datatables.net/1.10.9/js/jquery.dataTables.min.js',
-        jquery_url='https://code.jquery.com/jquery-1.11.3.min.js'
+        datatables_css_url='https://cdn.datatables.net/1.10.12/css/jquery.dataTables.css',
+        datatables_js_url='https://cdn.datatables.net/1.10.12/js/jquery.dataTables.min.js',
+        jquery_url='https://code.jquery.com/jquery-3.1.1.min.js'
     )
     with open(tmpfile) as f:
         assert f.read().strip() == ref.strip()
@@ -128,7 +129,7 @@ def test_write_jsviewer_local(tmpdir):
         display_length='10, 25, 50, 100, 500, 1000',
         datatables_css_url='file://' + join(EXTERN_DIR, 'css', 'jquery.dataTables.css'),
         datatables_js_url='file://' + join(EXTERN_DIR, 'js', 'jquery.dataTables.min.js'),
-        jquery_url='file://' + join(EXTERN_DIR, 'js', 'jquery-1.11.3.min.js')
+        jquery_url='file://' + join(EXTERN_DIR, 'js', 'jquery-3.1.1.min.js')
     )
     with open(tmpfile) as f:
         assert f.read().strip() == ref.strip()

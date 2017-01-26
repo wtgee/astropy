@@ -2,11 +2,14 @@
 
 # TEST_UNICODE_LITERALS
 import itertools
+import copy
 import numpy as np
 
 from .. import Time
 from ...tests.helper import pytest
 from ...utils.compat.numpycompat import NUMPY_LT_1_9
+from ...utils.compat.numpy import broadcast_to as np_broadcast_to
+
 
 class TestManipulation():
     """Manipulation of Time objects, ensuring attributes are done correctly."""
@@ -260,6 +263,25 @@ class TestManipulation():
         assert np.all(t2_take2.jd1 == self.t2.jd1.take((5, 15)))
         assert t2_take2.location.shape == t2_take2.shape
 
+    def test_broadcast(self):
+        """Test using a callable method."""
+        t0_broadcast = self.t0._apply(np_broadcast_to, shape=(3, 10, 5))
+        assert t0_broadcast.shape == (3, 10, 5)
+        assert np.all(t0_broadcast.jd1 == self.t0.jd1)
+        assert np.may_share_memory(t0_broadcast.jd1, self.t0.jd1)
+        assert t0_broadcast.location is None
+        t1_broadcast = self.t1._apply(np_broadcast_to, shape=(3, 10, 5))
+        assert t1_broadcast.shape == (3, 10, 5)
+        assert np.all(t1_broadcast.jd1 == self.t1.jd1)
+        assert np.may_share_memory(t1_broadcast.jd1, self.t1.jd1)
+        assert t1_broadcast.location is self.t1.location
+        t2_broadcast = self.t2._apply(np_broadcast_to, shape=(3, 10, 5))
+        assert t2_broadcast.shape == (3, 10, 5)
+        assert np.all(t2_broadcast.jd1 == self.t2.jd1)
+        assert np.may_share_memory(t2_broadcast.jd1, self.t2.jd1)
+        assert t2_broadcast.location.shape == t2_broadcast.shape
+        assert np.may_share_memory(t2_broadcast.location, self.t2.location)
+
 
 class TestArithmetic():
     """Arithmetic on Time objects, using both doubles."""
@@ -359,3 +381,17 @@ class TestArithmetic():
         # Bit superfluous, but good to check.
         assert np.all(self.t0.sort(-1)[:, :, 0] == self.t0.min(-1))
         assert np.all(self.t0.sort(-1)[:, :, -1] == self.t0.max(-1))
+
+
+def test_regression():
+    # For #5225, where a time with a single-element delta_ut1_utc could not
+    # be copied, flattened, or ravelled. (For copy, it is in test_basic.)
+    t = Time(49580.0, scale='tai', format='mjd')
+    t_ut1 = t.ut1
+    t_ut1_copy = copy.deepcopy(t_ut1)
+    assert type(t_ut1_copy.delta_ut1_utc) is float
+    t_ut1_flatten = t_ut1.flatten()
+    assert type(t_ut1_flatten.delta_ut1_utc) is float
+    t_ut1_ravel = t_ut1.ravel()
+    assert type(t_ut1_ravel.delta_ut1_utc) is float
+    assert t_ut1_copy.delta_ut1_utc == t_ut1.delta_ut1_utc

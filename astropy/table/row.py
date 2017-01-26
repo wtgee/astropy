@@ -8,7 +8,6 @@ import collections
 import numpy as np
 
 from ..extern import six
-from ..utils import deprecated
 from ..utils.compat import NUMPY_LT_1_8
 
 class Row(object):
@@ -89,17 +88,6 @@ class Row(object):
     @property
     def index(self):
         return self._index
-
-    @property
-    @deprecated('0.4', alternative=':attr:`Row.as_void`')
-    def data(self):
-        """
-        Returns a *read-only* copy of the row values in the form of np.void or
-        np.ma.mvoid objects.  This corresponds to the object types returned for
-        row indexing of a pure numpy structured array or masked array. This
-        method is slow and its use is deprecated.
-        """
-        return self.as_void()
 
     def as_void(self):
         """
@@ -197,7 +185,7 @@ class Row(object):
     def __unicode__(self):
         index = self.index if (self.index >= 0) else self.index + len(self._table)
         return '\n'.join(self.table[index:index + 1].pformat(max_width=-1))
-    if six.PY3:
+    if not six.PY2:
         __str__ = __unicode__
 
     def __bytes__(self):

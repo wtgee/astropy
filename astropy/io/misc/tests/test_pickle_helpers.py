@@ -1,5 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 from .. import fnpickle, fnunpickle
+from ....extern.six.moves import range
 
 def test_fnpickling_simple(tmpdir):
     """
@@ -70,7 +71,7 @@ def test_fnpickling_protocol(tmpdir):
     obj2 = ToBePickled(obj1)
 
     for p in range(pickle.HIGHEST_PROTOCOL + 1):
-        fn = str(tmpdir.join('testp%i.pickle' % p))
+        fn = str(tmpdir.join('testp{}.pickle'.format(p)))
         fnpickle(obj2, fn, protocol=p)
         res = fnunpickle(fn)
         assert res == obj2

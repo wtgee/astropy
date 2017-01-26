@@ -20,22 +20,42 @@ class Conf(_config.ConfigNamespace):
         'The table class to be used in Jupyter notebooks when displaying '
         'tables (and not overridden). See <http://getbootstrap.com/css/#tables '
         'for a list of useful bootstrap classes.')
+    replace_warnings = _config.ConfigItem(
+        ['slice'],
+        'List of conditions for issuing a warning when replacing a table '
+        "column using setitem, e.g. t['a'] = value.  Allowed options are "
+        "'always', 'slice', 'refcount', 'attributes'.",
+        'list',
+        )
+    replace_inplace = _config.ConfigItem(
+        False,
+        'Always use in-place update of a table column when using setitem, '
+        "e.g. t['a'] = value.  This overrides the default behavior of "
+        "replacing the column entirely with the new value when possible. "
+        "This configuration option will be deprecated and then removed in "
+        "subsequent major releases."
+        )
 
 
 conf = Conf()
 
 
-from .column import Column, MaskedColumn
+from .column import Column, MaskedColumn, StringTruncateWarning
 from .groups import TableGroups, ColumnGroups
-from .table import Table, QTable, TableColumns, Row, TableFormatter, NdarrayMixin
+from .table import (Table, QTable, TableColumns, Row, TableFormatter,
+                    NdarrayMixin, TableReplaceWarning)
 from .operations import join, hstack, vstack, unique, TableMergeError
-from .jsviewer import JSViewer
 from .bst import BST, FastBST, FastRBT
 from .sorted_array import SortedArray
 
-# Import routines that connect readers/writers to astropy.table
-from ..io.ascii import connect
-from ..io.fits import connect
-from ..io.misc import connect
-from ..io.votable import connect
-from . import jsviewer
+# Finally import the formats for the read and write method but delay building
+# the documentation until all are loaded. (#5275)
+from ..io import registry
+
+with registry.delay_doc_updates(Table):
+    # Import routines that connect readers/writers to astropy.table
+    from .jsviewer import JSViewer
+    from ..io.ascii import connect
+    from ..io.fits import connect
+    from ..io.misc import connect
+    from ..io.votable import connect

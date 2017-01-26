@@ -2,11 +2,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
 try:
-    from cStringIO import StringIO
-except ImportError:
-    from io import StringIO
-
-try:
     import h5py  # pylint: disable=W0611
 except ImportError:
     HAS_H5PY = False
@@ -23,7 +18,7 @@ import numpy as np
 import copy
 
 from ...extern import six
-from ...extern.six.moves import cPickle as pickle
+from ...extern.six.moves import cPickle as pickle, cStringIO as StringIO
 from ...tests.helper import pytest
 from ...table import Table, QTable, join, hstack, vstack, Column, NdarrayMixin
 from ... import time
@@ -517,3 +512,50 @@ def test_ndarray_mixin():
                            "(2, 'b') (20, 'bb') (200, 'rbb') 2 .. 3",
                            "(3, 'c') (30, 'cc') (300, 'rcc') 4 .. 5",
                            "(4, 'd') (40, 'dd') (400, 'rdd') 6 .. 7"]
+
+
+def test_possible_string_format_functions():
+    """
+    The QuantityInfo info class for Quantity implements a
+    possible_string_format_functions() method that overrides the
+    standard pprint._possible_string_format_functions() function.
+    Test this.
+    """
+    t = QTable([[1, 2] * u.m])
+    t['col0'].info.format = '%.3f'
+    assert t.pformat() == [' col0',
+                           '  m  ',
+                           '-----',
+                           '1.000',
+                           '2.000']
+
+    t['col0'].info.format = 'hi {:.3f}'
+    assert t.pformat() == ['  col0  ',
+                           '   m    ',
+                           '--------',
+                           'hi 1.000',
+                           'hi 2.000']
+
+    t['col0'].info.format = '.4f'
+    assert t.pformat() == [' col0 ',
+                           '  m   ',
+                           '------',
+                           '1.0000',
+                           '2.0000']
+
+
+def test_rename_mixin_columns(mixin_cols):
+    """
+    Rename a mixin column.
+    """
+    t = QTable(mixin_cols)
+    tc = t.copy()
+    t.rename_column('m', 'mm')
+    assert t.colnames == ['i', 'a', 'b', 'mm']
+    if isinstance(t['mm'], table_helpers.ArrayWrapper):
+        assert np.all(t['mm'].data == tc['m'].data)
+    elif isinstance(t['mm'], coordinates.SkyCoord):
+        assert np.all(t['mm'].ra == tc['m'].ra)
+        assert np.all(t['mm'].dec == tc['m'].dec)
+    else:
+        assert np.all(t['mm'] == tc['m'])

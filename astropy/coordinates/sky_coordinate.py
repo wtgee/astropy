@@ -8,12 +8,13 @@ import numpy as np
 
 from ..utils.compat.misc import override__dir__
 from ..extern import six
-from ..extern.six.moves import zip
+from ..extern.six.moves import zip, range
 from ..units import Unit, IrreducibleUnit
 from .. import units as u
 from ..wcs.utils import skycoord_to_pixel, pixel_to_skycoord
-from ..utils.exceptions import AstropyDeprecationWarning, AstropyWarning
-from ..utils.data_info import MixinInfo
+from ..utils.exceptions import AstropyDeprecationWarning
+from ..utils.data_info import MixinInfo, _get_obj_attrs_map
+from ..utils import ShapedLikeNDArray
 
 from .distances import Distance
 from .angles import Angle
@@ -79,8 +80,23 @@ class SkyCoordInfo(MixinInfo):
             repr_data = sc.represent_as(sc.representation, in_frame_units=True)
         return repr_data
 
+    def _represent_as_dict(self):
+        obj = self._parent
+        attrs = list(obj.representation_component_names)
+        attrs += list(FRAME_ATTR_NAMES_SET())
+        out = _get_obj_attrs_map(obj, attrs)
 
-class SkyCoord(object):
+        # Don't output distance if it is all unitless 1.0
+        if 'distance' in out and np.all(out['distance'] == 1.0):
+            del out['distance']
+
+        out['representation'] = obj.representation.get_name()
+        out['frame'] = obj.frame.name
+
+        return out
+
+
+class SkyCoord(ShapedLikeNDArray):
     """High-level object providing a flexible interface for celestial coordinate
     representation, manipulation, and transformation between systems.
 
@@ -160,7 +176,7 @@ class SkyCoord(object):
         Specifies the representation, e.g. 'spherical', 'cartesian', or
         'cylindrical'.  This affects the positional args and other keyword args
         which must correspond to the given representation.
-    copy: bool, optional
+    copy : bool, optional
         If `True` (default), a copy of any coordinate data is made.  This
         argument can only be passed in as a keyword argument.
     **keyword_args
@@ -226,22 +242,42 @@ class SkyCoord(object):
     def representation(self, value):
         self.frame.representation = value
 
-    def __len__(self):
-        return len(self.frame)
+    @property
+    def shape(self):
+        return self.frame.shape
 
-    def __nonzero__(self):  # Py 2.x
-        return self.frame.__nonzero__()
+    def _apply(self, method, *args, **kwargs):
+        """Create a new instance, applying a method to the underlying data.
 
-    def __bool__(self):  # Py 3.x
-        return self.frame.__bool__()
+        In typical usage, the method is any of the shape-changing methods for
+        `~numpy.ndarray` (``reshape``, ``swapaxes``, etc.), as well as those
+        picking particular elements (``__getitem__``, ``take``, etc.), which
+        are all defined in `~astropy.utils.misc.ShapedLikeNDArray`. It will be
+        applied to the underlying arrays in the representation (e.g., ``x``,
+        ``y``, and ``z`` for `~astropy.coordinates.CartesianRepresentation`),
+        as well as to any frame attributes that have a shape, with the results
+        used to create a new instance.
 
-    def __getitem__(self, item):
+        Internally, it is also used to apply functions to the above parts
+        (in particular, `~numpy.broadcast_to`).
+
+        Parameters
+        ----------
+        method : str or callable
+            If str, it is the name of a method that is applied to the internal
+            ``components``. If callable, the function is applied.
+        args : tuple
+            Any positional arguments for ``method``.
+        kwargs : dict
+            Any keyword arguments for ``method``.
+        """
+
         self_frame = self._sky_coord_frame
         try:
             # First turn `self` into a mockup of the thing we want - we can copy
             # this to get all the right attributes
-            self._sky_coord_frame = self_frame[item]
-            out = SkyCoord(self, representation=self.representation)
+            self._sky_coord_frame = self_frame._apply(method, *args, **kwargs)
+            out = SkyCoord(self, representation=self.representation, copy=False)
 
             # Copy other 'info' attr only if it has actually been defined.
             # See PR #3898 for further explanation and justification, along
@@ -360,7 +396,7 @@ class SkyCoord(object):
         # Frame name (string) or frame class?  Coerce into an instance.
         try:
             frame = _get_frame_class(frame)()
-        except:
+        except Exception:
             pass
 
         if isinstance(frame, SkyCoord):
@@ -696,12 +732,8 @@ class SkyCoord(object):
             raise ValueError('The other object does not have a distance; '
                              'cannot compute 3d separation.')
 
-        dx = self_in_other_system.cartesian.x - other.cartesian.x
-        dy = self_in_other_system.cartesian.y - other.cartesian.y
-        dz = self_in_other_system.cartesian.z - other.cartesian.z
-
-        distval = (dx.value ** 2 + dy.value ** 2 + dz.value ** 2) ** 0.5
-        return Distance(distval, dx.unit)
+        return Distance((self_in_other_system.cartesian -
+                         other.cartesian).norm())
 
     def spherical_offsets_to(self, tocoord):
         r"""
@@ -1152,7 +1184,7 @@ class SkyCoord(object):
     # Table interactions
     @classmethod
     def guess_from_table(cls, table, **coord_kwargs):
-        """
+        r"""
         A convenience method to create and return a new `SkyCoord` from the data
         in an astropy Table.
 
@@ -1399,7 +1431,7 @@ def _get_units(args, kwargs):
             units.extend(None for x in range(3 - len(units)))
             if len(units) > 3:
                 raise ValueError()
-        except:
+        except Exception:
             raise ValueError('Unit keyword must have one to three unit values as '
                              'tuple or comma-separated string')
 
@@ -1481,15 +1513,14 @@ def _parse_coordinate_arg(coords, frame, units, init_kwargs):
             # SkyCoords from the list elements and then combine them.
             scs = [SkyCoord(coord, **init_kwargs) for coord in coords]
 
-            # now check that they're all self-consistent in their frames and
-            # check if they are all UnitSphericalRepresentation internally
-            allunitsphrepr = True
+            # Check that all frames are equivalent
             for sc in scs[1:]:
                 if not sc.is_equivalent_frame(scs[0]):
                     raise ValueError("List of inputs don't have equivalent "
                                      "frames: {0} != {1}".format(sc, scs[0]))
-                if allunitsphrepr and not isinstance(sc.data, UnitSphericalRepresentation):
-                    allunitsphrepr = False
+
+            # Now use the first to determine if they are all UnitSpherical
+            allunitsphrepr = isinstance(scs[0].data, UnitSphericalRepresentation)
 
             # get the frame attributes from the first one, because from above we
             # know it matches all the others
@@ -1529,7 +1560,7 @@ def _parse_coordinate_arg(coords, frame, units, init_kwargs):
             # lengths the same
             try:
                 n_coords = sorted(set(len(x) for x in vals))
-            except:
+            except Exception:
                 raise ValueError('One or more elements of input sequence does not have a length')
 
             if len(n_coords) > 1:

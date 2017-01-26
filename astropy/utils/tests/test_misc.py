@@ -23,6 +23,12 @@ def test_isiterable():
     assert misc.isiterable(np.array([1, 2, 3])) is True
 
 
+def test_signal_number_to_name_no_failure():
+    # Regression test for #5340: ensure signal_number_to_name throws no
+    # AttributeError (it used ".iteritems()" which was removed in Python3).
+    misc.signal_number_to_name(0)
+
+
 @remote_data
 def test_api_lookup():
     strurl = misc.find_api_page('astropy.utils.misc', 'dev', False, timeout=3)
@@ -98,3 +104,13 @@ def test_set_locale():
 
     with misc.set_locale(current):
         assert date.strftime('%a, %b') == day_mon
+
+
+def test_check_broadcast():
+    assert misc.check_broadcast((10, 1), (3,)) == (10, 3)
+    assert misc.check_broadcast((10, 1), (3,), (4, 1, 1, 3)) == (4, 1, 10, 3)
+    with pytest.raises(ValueError):
+        misc.check_broadcast((10, 2), (3,))
+
+    with pytest.raises(ValueError):
+        misc.check_broadcast((10, 1), (3,), (4, 1, 2, 3))

@@ -6,6 +6,7 @@ from ...wcs import WCS
 from .. import utils
 from ..utils import proj_plane_pixel_scales, is_proj_plane_distorted, non_celestial_pixel_scales
 from ...tests.helper import pytest
+from ...extern.six.moves import range
 from ... import units as u
 
 import numpy as np
@@ -77,16 +78,28 @@ def test_slice():
     mywcs.wcs.crval = [1,1]
     mywcs.wcs.cdelt = [0.1,0.1]
     mywcs.wcs.crpix = [1,1]
+    mywcs._naxis = [1000, 500]
 
     slice_wcs = mywcs.slice([slice(1,None),slice(0,None)])
     assert np.all(slice_wcs.wcs.crpix == np.array([1,0]))
+    assert slice_wcs._naxis == [1000, 499]
 
     slice_wcs = mywcs.slice([slice(1,None,2),slice(0,None,4)])
     assert np.all(slice_wcs.wcs.crpix == np.array([0.625, 0.25]))
     assert np.all(slice_wcs.wcs.cdelt == np.array([0.4,0.2]))
+    assert slice_wcs._naxis == [250, 250]
 
     slice_wcs = mywcs.slice([slice(None,None,2),slice(0,None,2)])
     assert np.all(slice_wcs.wcs.cdelt == np.array([0.2,0.2]))
+    assert slice_wcs._naxis == [500, 250]
+
+    # Non-integral values do not alter the naxis attribute
+    slice_wcs = mywcs.slice([slice(50.), slice(20.)])
+    assert slice_wcs._naxis == [1000, 500]
+    slice_wcs = mywcs.slice([slice(50.), slice(20)])
+    assert slice_wcs._naxis == [20, 500]
+    slice_wcs = mywcs.slice([slice(50), slice(20.5)])
+    assert slice_wcs._naxis == [1000, 50]
 
 def test_slice_getitem():
     mywcs = WCS(naxis=2)

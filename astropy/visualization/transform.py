@@ -2,6 +2,7 @@
 
 from __future__ import division, print_function
 
+
 __all__ = ['BaseTransform', 'CompositeTransform']
 
 
@@ -22,9 +23,9 @@ class CompositeTransform(BaseTransform):
 
     Parameters
     ----------
-    transform_1: :class:`astropy.visualization.BaseTransform`
+    transform_1 : :class:`astropy.visualization.BaseTransform`
         The first transform to apply.
-    transform_2: :class:`astropy.visualization.BaseTransform`
+    transform_2 : :class:`astropy.visualization.BaseTransform`
         The second transform to apply.
     """
 

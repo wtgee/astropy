@@ -1,5 +1,5 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-import pytest
+from ...tests.helper import pytest
 import numpy as np
 from .test_table import SetupData
 from ..bst import BST, FastRBT
@@ -8,6 +8,7 @@ from ..table import QTable, Row
 from ... import units as u
 from ...time import Time
 from ..column import BaseColumn
+from ...extern.six.moves import range
 
 @pytest.fixture(params=[BST, FastRBT, SortedArray])
 def engine(request):
@@ -430,3 +431,14 @@ class TestIndex(SetupData):
         if self.mutable:
             with pytest.raises(ValueError):
                 t.add_row((5, 5.0, '9'))
+
+    def test_copy_indexed_table(self, table_types):
+        self._setup(_col, table_types)
+        t = self.t
+        t.add_index('a')
+        t.add_index(['a', 'b'])
+        for tp in (self._table_type(t), t.copy()):
+            assert len(t.indices) == len(tp.indices)
+            for index, indexp in zip(t.indices, tp.indices):
+                assert np.all(index.data.data == indexp.data.data)
+                assert index.data.data.colnames == indexp.data.data.colnames

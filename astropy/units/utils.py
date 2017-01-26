@@ -33,7 +33,7 @@ def _get_first_sentence(s):
     returns.
     """
 
-    x = re.match(".*?\S\.\s", s)
+    x = re.match(r".*?\S\.\s", s)
     if x is not None:
         s = x.group(0)
     return s.replace('\n', ' ')
@@ -177,7 +177,7 @@ def validate_power(p, support_tuples=False):
     else:
         try:
             p = float(p)
-        except:
+        except Exception:
             if not np.isscalar(p):
                 raise ValueError("Quantities and Units may only be raised "
                                  "to a scalar power")

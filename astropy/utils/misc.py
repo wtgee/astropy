@@ -26,14 +26,14 @@ from contextlib import contextmanager
 from collections import defaultdict, OrderedDict
 
 from ..extern import six
-from ..extern.six.moves import urllib
+from ..extern.six.moves import urllib, range, zip_longest
 
 
 __all__ = ['isiterable', 'silence', 'format_exception', 'NumpyRNGContext',
            'find_api_page', 'is_path_hidden', 'walk_skip_hidden',
            'JsonCustomEncoder', 'indent', 'InheritDocstrings',
            'OrderedDescriptor', 'OrderedDescriptorContainer', 'set_locale',
-           'ShapedLikeNDArray']
+           'ShapedLikeNDArray', 'check_broadcast', 'IncompatibleShapeError']
 
 
 def isiterable(obj):
@@ -288,8 +288,8 @@ def signal_number_to_name(signum):
     # Since these numbers and names are platform specific, we use the
     # builtin signal module and build a reverse mapping.
 
-    signal_to_name_map = dict(
-        (k, v) for v, k in signal.__dict__.iteritems() if v.startswith('SIG'))
+    signal_to_name_map = dict((k, v) for v, k in six.iteritems(signal.__dict__)
+                              if v.startswith('SIG'))
 
     return signal_to_name_map.get(signum, 'UNKNOWN')
 
@@ -873,6 +873,13 @@ class ShapedLikeNDArray(object):
 
     """
 
+    # Note to developers: if new methods are added here, be sure to check that
+    # they work properly with the classes that use this, such as Time and
+    # BaseRepresentation, i.e., look at their ``_apply`` methods and add
+    # relevant tests.  This is particularly important for methods that imply
+    # copies rather than views of data (see the special-case treatment of
+    # 'flatten' in Time).
+
     @abc.abstractproperty
     def shape(self):
         """The shape of the instance and underlying arrays."""
@@ -915,11 +922,50 @@ class ShapedLikeNDArray(object):
     def isscalar(self):
         return self.shape == ()
 
-    def __getitem__(self, item):
+    def __len__(self):
         if self.isscalar:
-            raise TypeError('scalar {0!r} object is not subscriptable.'.format(
-                self.__class__.__name__))
-        return self._apply('__getitem__', item)
+            raise TypeError("Scalar {0!r} object has no len()"
+                            .format(self.__class__.__name__))
+        return self.shape[0]
+
+    def __bool__(self):  # Python 3
+        """Any instance should evaluate to True, except when it is empty."""
+        return self.size > 0
+
+    def __nonzero__(self):  # Python 2
+        """Any instance should evaluate to True, except when it is empty."""
+        return self.size > 0
+
+    def __getitem__(self, item):
+        try:
+            return self._apply('__getitem__', item)
+        except IndexError:
+            if self.isscalar:
+                raise TypeError('scalar {0!r} object is not subscriptable.'
+                                .format(self.__class__.__name__))
+            else:
+                raise
+
+    def __iter__(self):
+        if self.isscalar:
+            raise TypeError('scalar {0!r} object is not iterable.'
+                            .format(self.__class__.__name__))
+
+        # We cannot just write a generator here, since then the above error
+        # would only be raised once we try to use the iterator, rather than
+        # upon its definition using iter(self).
+        def self_iter():
+            for idx in range(len(self)):
+                yield self[idx]
+
+        return self_iter()
+
+    def copy(self, *args, **kwargs):
+        """Return an instance containing copies of the internal data.
+
+        Parameters are as for :meth:`~numpy.ndarray.copy`.
+        """
+        return self._apply('copy', *args, **kwargs)
 
     def reshape(self, *args, **kwargs):
         """Returns an instance containing the same data with a new shape.
@@ -1002,3 +1048,57 @@ class ShapedLikeNDArray(object):
         obviously, no output array can be given.
         """
         return self._apply('take', indices, axis=axis, mode=mode)
+
+
+class IncompatibleShapeError(ValueError):
+    def __init__(self, shape_a, shape_a_idx, shape_b, shape_b_idx):
+        super(IncompatibleShapeError, self).__init__(
+                shape_a, shape_a_idx, shape_b, shape_b_idx)
+
+
+def check_broadcast(*shapes):
+    """
+    Determines whether two or more Numpy arrays can be broadcast with each
+    other based on their shape tuple alone.
+
+    Parameters
+    ----------
+    *shapes : tuple
+        All shapes to include in the comparison.  If only one shape is given it
+        is passed through unmodified.  If no shapes are given returns an empty
+        `tuple`.
+
+    Returns
+    -------
+    broadcast : `tuple`
+        If all shapes are mutually broadcastable, returns a tuple of the full
+        broadcast shape.
+    """
+
+    if len(shapes) == 0:
+        return ()
+    elif len(shapes) == 1:
+        return shapes[0]
+
+    reversed_shapes = (reversed(shape) for shape in shapes)
+
+    full_shape = []
+
+    for dims in zip_longest(*reversed_shapes, fillvalue=1):
+        max_dim = 1
+        max_dim_idx = None
+        for idx, dim in enumerate(dims):
+            if dim == 1:
+                continue
+
+            if max_dim == 1:
+                # The first dimension of size greater than 1
+                max_dim = dim
+                max_dim_idx = idx
+            elif dim != max_dim:
+                raise IncompatibleShapeError(
+                    shapes[max_dim_idx], max_dim_idx, shapes[idx], idx)
+
+        full_shape.append(max_dim)
+
+    return tuple(full_shape[::-1])

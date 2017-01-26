@@ -8,8 +8,9 @@ misc.py:
 
 from __future__ import absolute_import, division, print_function
 
-import itertools
 import collections
+import itertools
+import operator
 
 from ...extern.six.moves import zip, map, filter
 
@@ -17,7 +18,7 @@ from ...extern.six.moves import zip, map, filter
 def first_true_index(iterable, pred=None, default=None):
     """find the first index position for the which the callable pred returns True"""
     if pred is None:
-        func = lambda x: x[1]
+        func = operator.itemgetter(1)
     else:
         func = lambda x: pred(x[1])
     ii = next(filter(func, enumerate(iterable)), default)  # either index-item pair or default
@@ -27,7 +28,7 @@ def first_true_index(iterable, pred=None, default=None):
 def first_false_index(iterable, pred=None, default=None):
     """find the first index position for the which the callable pred returns False"""
     if pred is None:
-        func = lambda x: not x
+        func = operator.not_
     else:
         func = lambda x: not pred(x)
     return first_true_index(iterable, func, default)
@@ -44,9 +45,9 @@ def sortmore(*args, **kw):
 
     Keywords
     --------
-    globalkey: None
+    globalkey : None
         revert to sorting by key function
-    globalkey: callable
+    globalkey : callable
         Sort by evaluated value for all items in the lists
         (call signature of this function needs to be such that it accepts an
         argument tuple of items from each list.

@@ -14,6 +14,7 @@ import numpy as np
 from ..earth import EarthLocation, ELLIPSOIDS
 from ..angles import Longitude, Latitude
 from ...tests.helper import pytest, quantity_allclose, remote_data
+from ...extern.six.moves import zip
 from ... import units as u
 from ..name_resolve import NameResolveError
 
@@ -106,12 +107,12 @@ class TestInput():
         assert self.location.ellipsoid == EarthLocation._ellipsoid
 
     def test_geo_attributes(self):
-        assert all([np.all(_1 == _2)
-                    for _1, _2 in zip(self.location.geodetic,
-                                      self.location.to_geodetic())])
-        assert all([np.all(_1 == _2)
-                    for _1, _2 in zip(self.location.geocentric,
-                                      self.location.to_geocentric())])
+        assert all(np.all(_1 == _2)
+                   for _1, _2 in zip(self.location.geodetic,
+                                     self.location.to_geodetic()))
+        assert all(np.all(_1 == _2)
+                   for _1, _2 in zip(self.location.geocentric,
+                                     self.location.to_geocentric()))
 
     def test_attribute_classes(self):
         """Test that attribute classes are correct (and not EarthLocation)"""
@@ -270,19 +271,19 @@ def test_repr_latex():
 
 
 @remote_data
-def test_from_address():
+def test_of_address():
     # no match
     with pytest.raises(NameResolveError):
-        EarthLocation.from_address("lkjasdflkja")
+        EarthLocation.of_address("lkjasdflkja")
 
     # just a location
-    loc = EarthLocation.from_address("New York, NY")
+    loc = EarthLocation.of_address("New York, NY")
     assert quantity_allclose(loc.latitude, 40.7128*u.degree)
     assert quantity_allclose(loc.longitude, -74.0059*u.degree)
     assert np.allclose(loc.height.value, 0.)
 
     # a location and height
-    loc = EarthLocation.from_address("New York, NY", get_height=True)
+    loc = EarthLocation.of_address("New York, NY", get_height=True)
     assert quantity_allclose(loc.latitude, 40.7128*u.degree)
     assert quantity_allclose(loc.longitude, -74.0059*u.degree)
-    assert quantity_allclose(loc.height, 10.438659669*u.meter)
+    assert quantity_allclose(loc.height, 10.438659669*u.meter, atol=1.*u.cm)

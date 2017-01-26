@@ -16,6 +16,8 @@ from ...tests.helper import (pytest, quantity_allclose as allclose,
 from .. import EarthLocation, CartesianRepresentation
 from ...time import Time
 
+from ...extern.six.moves import range
+
 # used below in the next parametrized test
 m31_sys = [ICRS, FK5, FK4, Galactic]
 m31_coo = [(10.6847929, 41.2690650), (10.6847929, 41.2690650), (10.0004738, 40.9952444), (121.1744050, -21.5729360)]
@@ -200,13 +202,8 @@ class TestHCRS():
         # corresponding HCRS positions
         self.sun_hcrs_t1 = HCRS(CartesianRepresentation([0.0, 0.0, 0.0] * u.km),
                                 obstime=self.t1)
-        self.sun_hcrs_tarr1 = HCRS(CartesianRepresentation([0.0, 0.0, 0.0] * u.km),
-                                   obstime=self.tarr)
         twod_rep = CartesianRepresentation([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]] * u.km)
-        self.sun_hcrs_tarr1 = HCRS(CartesianRepresentation([0.0, 0.0, 0.0] * u.km),
-                                   obstime=self.tarr)
-        self.sun_hcrs_tarr2 = HCRS(twod_rep,
-                                   obstime=self.tarr)
+        self.sun_hcrs_tarr = HCRS(twod_rep, obstime=self.tarr)
         self.tolerance = 5*u.km
 
     def test_from_hcrs(self):
@@ -215,13 +212,8 @@ class TestHCRS():
         separation = transformed.separation_3d(self.sun_icrs_scalar)
         assert_allclose(separation, 0*u.km, atol=self.tolerance)
 
-        # test scalar position and non-scalar time
-        transformed = self.sun_hcrs_tarr1.transform_to(ICRS())
-        separation = transformed.separation_3d(self.sun_icrs_arr)
-        assert_allclose(separation, 0*u.km, atol=self.tolerance)
-
         # test non-scalar positions and times
-        transformed = self.sun_hcrs_tarr2.transform_to(ICRS())
+        transformed = self.sun_hcrs_tarr.transform_to(ICRS())
         separation = transformed.separation_3d(self.sun_icrs_arr)
         assert_allclose(separation, 0*u.km, atol=self.tolerance)
 
@@ -232,7 +224,7 @@ class TestHCRS():
         assert_allclose(separation, 0*u.km, atol=self.tolerance)
         # nonscalar positions
         transformed = self.sun_icrs_arr.transform_to(HCRS(obstime=self.tarr))
-        separation = transformed.separation_3d(self.sun_hcrs_tarr1)
+        separation = transformed.separation_3d(self.sun_hcrs_tarr)
         assert_allclose(separation, 0*u.km, atol=self.tolerance)
 
 

@@ -36,12 +36,20 @@ import numpy as np
 from .utils import poly_map_domain
 from ..utils.exceptions import AstropyUserWarning
 from ..extern import six
+from ..extern.six.moves import range
 from .optimizers import (SLSQP, Simplex)
 from .statistic import (leastsquare)
 
+#Check pkg_resources exists
+try:
+    from pkg_resources import iter_entry_points
+    HAS_PKG=True
+except ImportError:
+    HAS_PKG=False
 
-__all__ = ['LinearLSQFitter', 'LevMarLSQFitter', 'SLSQPLSQFitter',
-           'SimplexLSQFitter', 'JointFitter', 'Fitter']
+
+__all__ = ['LinearLSQFitter', 'LevMarLSQFitter', 'FittingWithOutlierRemoval',
+           'SLSQPLSQFitter', 'SimplexLSQFitter', 'JointFitter', 'Fitter']
 
 
 
@@ -339,6 +347,96 @@ class LinearLSQFitter(object):
 
         _fitter_to_model_params(model_copy, lacoef.flatten())
         return model_copy
+
+
+class FittingWithOutlierRemoval(object):
+    """
+    This class combines an outlier removal technique with a fitting procedure.
+    Basically, given a number of iterations ``niter``, outliers are removed
+    and fitting is performed for each iteration.
+
+    Parameters
+    ----------
+    fitter : An Astropy fitter
+        An instance of any Astropy fitter, i.e., LinearLSQFitter,
+        LevMarLSQFitter, SLSQPLSQFitter, SimplexLSQFitter, JointFitter.
+    outlier_func : function
+        A function for outlier removal.
+    niter : int (optional)
+        Number of iterations.
+    outlier_kwargs : dict (optional)
+        Keyword arguments for outlier_func.
+    """
+
+    def __init__(self, fitter, outlier_func, niter=3, **outlier_kwargs):
+        self.fitter = fitter
+        self.outlier_func = outlier_func
+        self.niter = niter
+        self.outlier_kwargs = outlier_kwargs
+
+    def __str__(self):
+        return ("Fitter: {0}\nOutlier function: {1}\nNum. of iterations: {2}"+
+                ("\nOutlier func. args.: {3}"))\
+                .format(self.fitter__class__.__name__,\
+                        self.outlier_func.__name__, self.niter,\
+                        self.outlier_kwargs)
+
+    def __repr__(self):
+        return ("{0}(fitter: {1}, outlier_func: {2}," +
+                " niter: {3}, outlier_kwargs: {4})")\
+                 .format(self.__class__.__name__,
+                         self.fitter.__class__.__name__,
+                         self.outlier_func.__name__, self.niter,
+                         self.outlier_kwargs)
+
+    def __call__(self, model, x, y, z=None, weights=None, **kwargs):
+        """
+        Parameters
+        ----------
+        model : `~astropy.modeling.FittableModel`
+            An analytic model which will be fit to the provided data.
+            This also contains the initial guess for an optimization
+            algorithm.
+        x : array-like
+            Input coordinates.
+        y : array-like
+            Data measurements (1D case) or input coordinates (2D case).
+        z : array-like (optional)
+            Data measurements (2D case).
+        weights : array-like (optional)
+            Weights to be passed to the fitter.
+        kwargs : dict (optional)
+            Keyword arguments to be passed to the fitter.
+
+        Returns
+        -------
+        filtered_data : numpy.ma.core.MaskedArray
+            Data used to perform the fitting after outlier removal.
+        fitted_model : `~astropy.modeling.FittableModel`
+            Fitted model after outlier removal.
+        """
+
+        fitted_model = self.fitter(model, x, y, z, weights, **kwargs)
+        if z is None:
+            filtered_data = y
+            for n in range(self.niter):
+                filtered_data = self.outlier_func(filtered_data,
+                                                  **self.outlier_kwargs)
+                fitted_model = self.fitter(fitted_model,
+                               x[~filtered_data.mask],
+                               filtered_data.data[~filtered_data.mask],
+                               **kwargs)
+        else:
+            filtered_data = z
+            for n in range(self.niter):
+                filtered_data = self.outlier_func(filtered_data,
+                                                  **self.outlier_kwargs)
+                fitted_model = self.fitter(fitted_model,
+                               x[~filtered_data.mask],
+                               y[~filtered_data.mask],
+                               filtered_data.data[~filtered_data.mask],
+                               **kwargs)
+        return filtered_data, fitted_model
 
 
 @six.add_metaclass(_FitterMeta)
@@ -747,15 +845,15 @@ class JointFitter(object):
 
     def _verify_input(self):
         if len(self.models) <= 1:
-            raise TypeError("Expected >1 models, %d is given" %
-                            len(self.models))
+            raise TypeError("Expected >1 models, {} is given".format(
+                    len(self.models)))
         if len(self.jointparams.keys()) < 2:
             raise TypeError("At least two parameters are expected, "
-                            "%d is given" % len(self.jointparams.keys()))
+                            "{} is given".format(len(self.jointparams.keys())))
         for j in self.jointparams.keys():
             if len(self.jointparams[j]) != len(self.initvals):
-                raise TypeError("%d parameter(s) provided but %d expected" %
-                                (len(self.jointparams[j]), len(self.initvals)))
+                raise TypeError("{} parameter(s) provided but {} expected".format(
+                        len(self.jointparams[j]), len(self.initvals)))
 
     def __call__(self, *args):
         """
@@ -766,9 +864,9 @@ class JointFitter(object):
         from scipy import optimize
 
         if len(args) != reduce(lambda x, y: x + 1 + y + 1, self.modeldims):
-            raise ValueError("Expected %d coordinates in args but %d provided"
-                             % (reduce(lambda x, y: x + 1 + y + 1,
-                                       self.modeldims), len(args)))
+            raise ValueError("Expected {} coordinates in args but {} provided"
+                             .format(reduce(lambda x, y: x + 1 + y + 1,
+                                            self.modeldims), len(args)))
 
         self.fitparams[:], _ = optimize.leastsq(self.objective_function,
                                                 self.fitparams, args=args)
@@ -936,17 +1034,16 @@ def _validate_constraints(supported_constraints, model):
 
     message = 'Optimizer cannot handle {0} constraints.'
 
-    if (any(model.fixed.values()) and
+    if (any(six.itervalues(model.fixed)) and
             'fixed' not in supported_constraints):
         raise UnsupportedConstraintError(
                 message.format('fixed parameter'))
 
-    if (any(model.tied.values()) and
-            'tied' not in supported_constraints):
+    if any(six.itervalues(model.tied)) and 'tied' not in supported_constraints:
         raise UnsupportedConstraintError(
                 message.format('tied parameter'))
 
-    if (any([tuple(b) != (None, None) for b in model.bounds.values()]) and
+    if (any(tuple(b) != (None, None) for b in six.itervalues(model.bounds)) and
             'bounds' not in supported_constraints):
         raise UnsupportedConstraintError(
                 message.format('bound parameter'))
@@ -954,8 +1051,7 @@ def _validate_constraints(supported_constraints, model):
     if model.eqcons and 'eqcons' not in supported_constraints:
         raise UnsupportedConstraintError(message.format('equality'))
 
-    if (model.ineqcons and
-            'ineqcons' not in supported_constraints):
+    if model.ineqcons and 'ineqcons' not in supported_constraints:
         raise UnsupportedConstraintError(message.format('inequality'))
 
 
@@ -978,3 +1074,50 @@ def _validate_model(model, supported_constraints):
 
     model_copy = model.copy()
     return model_copy
+
+
+def populate_entry_points(entry_points):
+    """
+    This injects entry points into the `astropy.modeling.fitting` namespace.
+    This provides a means of inserting a fitting routine without requirement
+    of it being merged into astropy's core.
+
+    Parameters
+    ----------
+
+    entry_points : a list of `~pkg_resources.EntryPoint`
+                  entry_points are objects which encapsulate
+                  importable objects and are defined on the
+                  installation of a package.
+    Notes
+    -----
+    An explanation of entry points can be found `here <http://setuptools.readthedocs.io/en/latest/setuptools.html#dynamic-discovery-of-services-and-plugins>`
+
+    """
+
+    for entry_point in entry_points:
+        name = entry_point.name
+        try:
+            entry_point = entry_point.load()
+        except Exception as e:
+            # This stops the fitting from choking if an entry_point produces an error.
+            warnings.warn(AstropyUserWarning('{type} error occurred in entry '
+                                             'point {name}.' .format(type=type(e).__name__, name=name)))
+        else:
+            if not inspect.isclass(entry_point):
+                warnings.warn(AstropyUserWarning(
+                    'Modeling entry point {0} expected to be a '
+                    'Class.' .format(name)))
+            else:
+                if issubclass(entry_point, Fitter):
+                    name = entry_point.__name__
+                    globals()[name] = entry_point
+                    __all__.append(name)
+                else:
+                    warnings.warn(AstropyUserWarning(
+                        'Modeling entry point {0} expected to extend '
+                        'astropy.modeling.Fitter' .format(name)))
+
+# this is so fitting doesn't choke if pkg_resources doesn't exist
+if HAS_PKG:
+    populate_entry_points(iter_entry_points(group='astropy.modeling', name=None))
